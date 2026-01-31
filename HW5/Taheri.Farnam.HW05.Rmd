@@ -1,0 +1,952 @@
+---
+title: "Analysis of Union Membership Impact on Wages"
+author: "Farnam Taheri" 
+date: "`r Sys.Date()`" 
+output:
+  html_document: # Specifies that the output will be an HTML document
+    theme: readable # Uses a theme that is easy to read
+    highlight: kate # Syntax highlighting style
+    toc: true # Includes a table of contents
+    toc_depth: 4 # Depth of headers included in the table of contents
+    toc_float: true # Makes the table of contents floating
+    df_print: paged # Data frames are printed as paged tables
+    code_folding: hide # Does not Allow code blocks to be collapsed
+editor_options: 
+  markdown: 
+    wrap: 72 # Sets the wrap limit for lines in markdown cells
+bibliography: HW05.bib # Specifies the bibliography file
+---
+
+## [Description]{.smallcaps}
+
+This homework assignment explores the effects of union membership on
+workers' wages using a dataset from Vella and Verbeek (1998). We will
+use matching techniques to estimate the average treatment effect of
+union membership on wages, while controlling for observable
+characteristics.
+
+## [Identifying the Effects of a Treatment on an Outcome .]{.smallcaps}
+
+In Identifying the effects of a treatment on an outcome, with CIA
+satisfied, we ought to control for the observable characteristics X. We
+saw in lecture 9 (regression and causality) how to do so by a parametric
+approach: Enter X as independent variables in the regression
+specification. Unfortunately, despite many covariates in the
+specification, our estimates might still be unreliable. Why? Roughly
+speaking, the simple linear regression never differentiates between
+observations; it considers the whole untreated subjects as control
+group, which is problematic, notably if the data in hand are
+observational, where many untreated subjects may not be comparable with
+treated ones.
+
+*Matching*, a nonparametric method, helps us overcome this problem. As
+noted in the lecture slide, its basic idea is to use observables to
+match similar units in different groups and estimate the treatment
+effect by averaging the effects between similar units. In this homework
+we learn how to implement matching to form a suitable control group and
+estimate average treatment effect on the treated in a real world case
+discussed during the lecture meetings.
+
+[Vella and Verbeek
+1998](https://doi.org/10.1002/(sici)1099-1255(199803/04)13:2%3C163::aid-jae460%3E3.0.co;2-y "Vella, Francis, and Marno Verbeek. 1998. “Whose wages do unions raise? A dynamic model of unionism and wage rate determination for young men.” Journal of Applied Econometrics 13, no. 2 (March): 163–183. ISSN: 1099-1255.")
+examine the effects of union membership on workers’ wages, using a panel
+data (1980-1987) of 545 young male workers. We want to exploit their
+rich data to study the same matter via matching. Please download the
+complete
+[dataset](https://drive.google.com/file/d/1AF5PqCuF2es1z82uv9PF4QfmASFufohU/view "VV98DATA.zip")
+here. This time we use only data of the year 1987, when 143 of workers
+are members of unions. You can refer to table 1 of the paper to read the
+description of each column of dataset. Below, the steps of carrying out
+matching are reviewed and in each step the relevant information for
+doing this homework are provided.
+
+### **1.Variables to control.**
+
+The first step in matching is choosing variables that we use to match
+treated to untreated subjects. Several factors affect both union
+membership status and wage of a worker. In order to make our results
+comparable with those presented in page 15 of lecture slide, we consider
+the following covariates:
+
+-   1 dummy for rural area
+
+-   3 regional dummies
+
+-   12 sectoral dummies
+
+-   Experience
+
+-   Schooling
+
+### **2. Exact or distance matching.**
+
+Then we determine how close the treatment and control group’s units
+should be regarding the selected covariates. The ideal is that they
+should be identical - only different in treatment status (union
+membership in this problem set). Most probably we cannot find such pairs
+in our data, therefore as suggested in the lecture note, we give up
+exact matching for the last two covariates: Distance matching for
+experience and schooling, exact matching for the others. Exact matching
+is often called ”stratification” in the literature.
+
+### **3. How to measure distance.**
+
+Now that we want to do a distance matching for experience and schooling,
+we should determine how to measure the closeness of units with respect
+to these variables. We use two popular distance measures in this problem
+set: Mahalanobis, the propensity score.
+
+### **4. Setting a caliper.**
+
+After specifying the type of distance, we set our criterion for
+accepting an untreated subject as a control for a treated one. We should
+answer the following question: Does the closest available untreated
+subject to a treated one make an acceptable control? If not, we should
+set a caliper, i.e., the threshold of closeness of the treatment and
+control group. We recognize an untreated unit as a control as long as it
+falls within our desired interval based on our selected distance. The
+required calipers are specified separately in each question later.
+
+### **5. Pair or multiple matching.**
+
+What if more than one untreated unit were close enough to a treated unit
+according to the caliper? Would we regard all of them or a fixed number
+of them as controls (multiple matching), or just the closest unit to
+that treated one (pair matching)? We employ just pair matching in this
+homework.
+
+### **6. Matching with or without replacement.**
+
+Once matched to a treated unit, is the untreated one yet eligible for
+becoming matched to other treated units (with replacement) or it is
+allowed to be matched to just a single treated unit (without
+replacement)? This problem set asks you to do matching without
+replacement.
+
+### **7. Selecting a matching method.**
+
+There are several matching methods including nearest 2, optimal, full.
+We consider just the first one, which, as mentioned in its help article,
+’performs greedy nearest neighbor matching. A distance is computed
+between each treated unit and each control unit, and, one by one, each
+treated unit is assigned a control unit as a match. The matching is
+”greedy” in the sense that there is no action taken to optimize an
+overall criterion; Each match is selected without considering the other
+matches that may occur subsequently.
+
+### **8. Choosing a matching estimator.**
+
+Up until now a matched sample is constructed. The last step is to choose
+a matching estimator. In this homework we simply calculate the average
+of differences between outcome (log wage) of treated subjects and that
+of their matched subjects, which estimates the treatment effect on the
+treated
+
+$$E\left[Y_{1i} - Y_{0i} | D = 1\right] \approx \frac{1}{N_{T_m}} \sum_{i \in T_m} \left[Y_i - Y_{c(i)}\right]$$
+
+This is equal to $δ_1$ in page 14 of the lecture note. In this problem
+set, if a treated subject remained without any match, we would ignore
+him while computing the above average. Considering the above steps,
+answer the following questions:
+
+## [Requirements]{.smallcaps}
+
+### Import required Packages
+
+```{r setup}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+# Import required packages
+library(dplyr) # For data manipulation and transformation
+library(tidyr) # For data tidying and reshaping
+library(haven) # For reading Stata data (.dta files)
+library(tidyverse) # Collection of data manipulation and visualization tools
+library(knitr)  # For including R code and results in reports 
+library(stargazer)  # For creating publication-quality tables
+library(MatchIt)  # For performing matching techniques
+library(kableExtra) # For advanced table formatting
+library(htmltools) # For HTML formatting and content creation
+```
+
+### Set the working directory
+
+```{r message=FALSE, warning=FALSE}
+# Set the working directory to the location of the data files
+setwd("./Data")
+
+# Assign the working directory to a variable for future reference
+working_dir <- getwd()
+```
+
+### Load Data
+
+We can load `.RDS` data as follows:
+
+```{r}
+# Import the data from the VV98.RDS file as a tibble
+VV98_rds <- as_tibble(readRDS(file.path(working_dir, "VV98.RDS"))) |>
+  
+  # Filter the data to only include observations from the year 1987
+  filter(YEAR == 1987) |>
+  
+
+  # Select only the necessary columns for the analysis
+  select(
+    "SCHOOL", "EXPER", "RUR", "NE", "NC",
+    "S", "WAGE", "UNION", "AG", "MIN", "CON",
+    "TRAD", "TRA", "FIN", "BUS", "PER", "ENT",
+    "MAN", "PRO", "PUB"
+  )
+```
+
+Alternatively, we can import the `.dta` data as follows:
+
+```{r}
+# Import the data from the VV98.dta file as a tibble
+VV98_dta <- read_stata(file.path(working_dir, "VV98.dta")) |>
+  
+  # Filter the data to only include observations from the year 1987
+  filter(YEAR == 1987) |>
+  
+  # Select only the necessary columns for the analysis
+  select(
+    "SCHOOL", "EXPER", "RUR", "NE", "NC",
+    "S", "WAGE", "UNION", "AG", "MIN", "CON",
+    "TRAD", "TRA", "FIN", "BUS", "PER", "ENT",
+    "MAN", "PRO", "PUB"
+  )
+```
+
+### Renaming variables for clarity
+
+In the following code block we rename the variables in the dataset to
+more descriptive names. This aids in understanding the analysis and
+ensures that the code is self-explanatory.
+
+```{r}
+
+
+VV98 <- VV98_rds %>%
+  rename(
+    YearsOfSchooling = SCHOOL, # Total years of schooling completed
+    WorkExperience = EXPER,    # Years of work experience
+    RuralArea = RUR,           # Dummy for living in a rural area
+    NorthEastRegion = NE,      # Dummy for living in the North East region
+    NorthCentralRegion = NC,   # Dummy for living in the North Central region
+    SouthernRegion = S,        # Dummy for living in the Southern region
+    HourlyWageLog = WAGE,      # Logarithm of the hourly wage
+    UnionMember = UNION,       # Dummy for union membership
+    AgricultureSector = AG,    # Dummy for working in the agriculture sector
+    MiningSector = MIN,        # Dummy for working in the mining sector
+    ConstructionSector = CON,  # Dummy for working in the construction sector
+    TradeSector = TRAD,        # Dummy for working in the trade sector
+    TransportationSector = TRA,# Dummy for working in the transportation sector
+    FinanceSector = FIN,       # Dummy for working in the finance sector
+    BusinessServiceSector = BUS,# Dummy for working in the business service sector
+    PersonalServiceSector = PER,# Dummy for working in the personal service sector
+    EntertainmentSector = ENT, # Dummy for working in the entertainment sector
+    ManufacturingSector = MAN, # Dummy for working in the manufacturing sector
+    ProfessionalServiceSector = PRO,# Dummy for working in the professional service sector
+    PublicAdministrationSector = PUB # Dummy for working in the public administration sector
+  )
+```
+
+## [Questions]{.smallcaps}
+
+### [1. Pre-Matching Analysis: Union Membership and Wage]{.smallcaps}
+
+**Before doing matching, calculate the observed effect of union
+membership on wages,** $\mathbb{E}[Y | D = 1] − \mathbb {E}[Y | D = 0]$.
+
+The following code calculates the observed effect of union membership on
+wages. It groups the data by union membership status and calculates the
+average wage for each group. Then, it computes the difference in average
+wages between union and non-union workers.
+
+```{r}
+# Calculate the effect of union membership on wages
+union_wage_effect <- VV98 %>%
+  group_by(UnionMember) %>%  # Group data by union membership status
+  summarise(AverageWage = mean(exp(HourlyWageLog))) %>%  # Calculate average wage for each group
+  spread(UnionMember, AverageWage) %>%  # Reshape data for comparison
+  mutate(ObservedEffect = `1` - `0`)  # Compute the difference in average wages
+```
+
+```{r}
+# Prepare the results for presentation
+wage_comparison_table <- union_wage_effect %>%
+  select(`0`, `1`, ObservedEffect) %>%  # Select relevant columns
+  rename(                              # Rename for clarity
+    'Average Wage (Non-Union)' = `0`,  # Average wage for non-union workers
+    'Average Wage (Union)' = `1`,      # Average wage for union workers
+    'Union Wage Effect' = ObservedEffect  # Effect of union membership on wages
+  )
+
+
+# Create a formatted table with the results
+knitr::kable(wage_comparison_table,
+             caption = "<center>Observed Effect of Union Membership on Wages<center>", 
+             align = 'c', # Center align the columns
+             digits = 3, # Set the number of decimal places to 3
+             format = "html", # Output the table in HTML format
+             table.attr = "style='width:90%;'", # Set the width of the table
+             row.names = FALSE) %>% # Remove row names
+        kable_styling(
+             bootstrap_options = c("striped", "hover"), # Add Bootstrap styling options
+             full_width = F) %>% # Set to false to not stretch the table to full width
+        add_footnote( # Add a footnote for the data source
+             "Source: Vella and Verbeek (1998), National Longitudinal Survey (NLS Youth Sample)") %>%
+        scroll_box(width = "100%", height = "500px") # Add a scroll box if the table is too long
+```
+
+### [2. Verifying Reliability of the Results: A Covariate Balance Analysis]{.smallcaps}
+
+**Is the previous result reliable? Answer this question via checking out
+covariate balance for schooling, experience and the rural dummy; Compare
+these variables’ means and standard deviations in the treatment and
+control group.**
+
+The following code is used to assess the balance of covariates between
+the treatment group (union members) and the control group (non-union
+members). Covariate balance is important to ensure that the groups are
+comparable on observed characteristics before performing matching.
+
+```{r}
+# Assessing Covariate Balance
+covariate_balance <- VV98 %>%
+  group_by(UnionMember) %>% # Group data by union membership status
+  summarise(
+    MeanYearsOfSchooling = mean(YearsOfSchooling, na.rm = TRUE),  # Calculate the mean years of schooling, excluding NA values
+    SdYearsOfSchooling = sd(YearsOfSchooling, na.rm = TRUE),      # Calculate the standard deviation of years of schooling, excluding NA values
+    MeanWorkExperience = mean(WorkExperience, na.rm = TRUE),
+    SdWorkExperience = sd(WorkExperience, na.rm = TRUE),
+    MeanRuralArea = mean(RuralArea, na.rm = TRUE),
+    SdRuralArea = sd(RuralArea, na.rm = TRUE)
+  ) %>%
+  pivot_longer(
+    cols = -UnionMember, # Exclude the UnionMember column from reshaping
+    names_to = "measure", # Create a new column 'measure' for variable names
+    values_to = "value"   # Create a new column 'value' for variable values
+  ) %>%
+  # Reshape the data back to wide format, with separate columns for each UnionMember group
+  pivot_wider(
+    names_from = UnionMember, # Use the UnionMember values to create new column names
+    values_from = value,      # Fill the new columns with values from the 'value' column
+    names_glue = "{.value}_{UnionMember}" # Create new column names by combining 'value' and 'UnionMember'
+  )
+
+# Display the adjusted covariate balance table
+knitr::kable(covariate_balance,
+             caption = "<center>Covariate Balance for Schooling, Experience, and Rural Area<center>", 
+             align = 'c',
+             digits = 3,
+             format = "html",
+             table.attr = "style='width:90%;'") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"),
+                full_width = F) %>%
+  add_footnote("Source: Vella and Verbeek (1998), National Longitudinal Survey (NLS Youth Sample)")
+
+
+```
+
+-   **Years of Schooling**:
+    -   Mean: The mean years of schooling are slightly higher in the
+        control group $(11.786)$ compared to the treatment group
+        $(11.713)$. This difference is small and may not be significant.
+    -   Standard Deviation (SD): The control group has a higher
+        variability in years of schooling $(SD = 1.895)$ compared to the
+        treatment group $(SD = 1.248)$.
+-   **Work Experience**:
+    -   Mean: The mean work experience is almost the same between the
+        control group $(10.002)$ and the treatment group (10.049),
+        suggesting good balance for this covariate.
+    -   SD: The control group shows slightly more variability in work
+        experience $(SD = 1.739)$ than the treatment group
+        $(SD = 1.396)$.
+-   **Rural Area**:
+    -   Mean: The proportion of individuals living in rural areas is
+        very similar between the control group $(0.221)$ and the
+        treatment group $(0.210)$.
+    -   SD: The standard deviations are also similar ($0.416$ for the
+        control group and 0.409 for the treatment group), indicating
+        balanced distribution for this dummy variable.
+
+Overall, the covariate balance for schooling and rural area seems
+reasonable, with only minor differences in means and standard
+deviations. However, the larger standard deviation for years of
+schooling in the control group suggests that there might be more
+variability in educational background among non-union members. This
+could potentially affect the reliability of the results if not properly
+accounted for in the analysis.
+
+### [3. Pair Matching Analysis: No Caliper]{.smallcaps}
+
+**Under pair matching, on a Mahalanobis distance, without a caliper and
+without replacement, what is the treatment effect of union membership on
+wages of the treated subjects (ATT)?**
+
+This section estimates the Average Treatment Effect on the Treated (ATT)
+for union membership on wages using pair matching. The analysis employs
+**Mahalanobis** distance without a caliper and without replacement to
+find the closest match for each treated subject.
+
+```{r}
+# Define the model for pair matching with Mahalanobis distance
+pair_matching_model <- matchit(UnionMember ~ YearsOfSchooling + WorkExperience,
+                               data = VV98,
+                               method = "nearest",
+                               distance = "mahalanobis",
+                               caliper = NULL,
+                               exact = ~ RuralArea + NorthEastRegion + NorthCentralRegion + SouthernRegion + AgricultureSector + MiningSector + ConstructionSector + TradeSector + TransportationSector + FinanceSector + BusinessServiceSector + PersonalServiceSector + EntertainmentSector + ManufacturingSector + ProfessionalServiceSector + PublicAdministrationSector,
+                               replace = FALSE)
+
+# Perform the pair matching
+matched_pairs <- match.data(pair_matching_model)
+
+# Calculate the ATT by comparing wages between matched pairs
+treatment_effect_union_membership <- with(matched_pairs, mean(HourlyWageLog[UnionMember == 1]) - mean(HourlyWageLog[UnionMember == 0]))
+```
+
+```{r}
+# Create the table with the results
+att_result_table <- knitr::kable(data.frame(TreatmentEffectATT = treatment_effect_union_membership),
+                                 caption = "<center>Treatment Effect of Union Membership on Wages<center>",
+                                 align = 'c',
+                                 digits = 3,
+                                 col.names = c("Average Treatment Effect on the Treated (ATT)"),
+                                 format = "html",
+                                 table.attr = "style='width:70%; margin:auto;'") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"),
+                full_width = F,
+                position = "center") %>%
+  add_header_above(c(" " = 1)) %>%
+  add_footnote(c("Source: Vella and Verbeek (1998), National Longitudinal Survey (NLS Youth Sample)",
+                 "Note: Analysis based on Mahalanobis distance without a caliper and without replacement."))
+
+# Print the ATT result table
+att_result_table
+```
+
+### [4. Evaluating Matching Performance]{.smallcaps}
+
+**Compare the covariate balance of the initial sample and the matched
+sample. According to this, which of the above estimates is preferred?**
+
+In this part, we compare the covariate balance between the initial
+sample and the matched sample. Covariate balance ensures that the
+treated and control groups are comparable on observed characteristics
+before performing matching.
+
+```{r}
+# Calculate covariate balance for the initial sample
+initial_covariate_balance <- VV98 %>%
+  group_by(UnionMember) %>%
+  summarise(
+    MeanYearsOfSchooling = mean(YearsOfSchooling, na.rm = TRUE),
+    SdYearsOfSchooling = sd(YearsOfSchooling, na.rm = TRUE),
+    MeanWorkExperience = mean(WorkExperience, na.rm = TRUE),
+    SdWorkExperience = sd(WorkExperience, na.rm = TRUE),
+    MeanRuralArea = mean(RuralArea, na.rm = TRUE),
+    SdRuralArea = sd(RuralArea, na.rm = TRUE)
+  ) %>%
+  pivot_longer(
+    cols = -UnionMember,
+    names_to = "measure",
+    values_to = "value"
+  ) %>%
+  pivot_wider(
+    names_from = UnionMember,
+    values_from = value,
+    names_glue = "{.value}_{UnionMember}"
+  )
+```
+
+```{r}
+# Calculate covariate balance for the matched sample
+matched_covariate_balance <- matched_pairs %>%
+  group_by(UnionMember) %>%
+  summarise(
+    MeanYearsOfSchooling = mean(YearsOfSchooling, na.rm = TRUE),
+    SdYearsOfSchooling = sd(YearsOfSchooling, na.rm = TRUE),
+    MeanWorkExperience = mean(WorkExperience, na.rm = TRUE),
+    SdWorkExperience = sd(WorkExperience, na.rm = TRUE),
+    MeanRuralArea = mean(RuralArea, na.rm = TRUE),
+    SdRuralArea = sd(RuralArea, na.rm = TRUE)
+  ) %>%
+  pivot_longer(
+    cols = -UnionMember,
+    names_to = "measure",
+    values_to = "value"
+  ) %>%
+  pivot_wider(
+    names_from = UnionMember,
+    values_from = value,
+    names_glue = "{.value}_{UnionMember}"
+  )
+
+```
+
+```{r}
+# Table for initial sample covariate balance
+initial_covariate_balance_table <- knitr::kable(initial_covariate_balance,
+                                                caption = "<center>Covariate Balance for Initial Sample<center>", 
+                                                align = 'c',
+                                                digits = 3,
+                                                format = "html",
+                                                table.attr = "style='width:90%;'") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"),
+                full_width = F) %>%
+  add_footnote("Source: Vella and Verbeek (1998), National Longitudinal Survey (NLS Youth Sample)")
+
+```
+
+```{r}
+# Table for matched sample covariate balance
+matched_covariate_balance_table <- knitr::kable(matched_covariate_balance,
+                                                caption = "<center>Covariate Balance for Matched Sample<center>", 
+                                                align = 'c',
+                                                digits = 3,
+                                                format = "html",
+                                                table.attr = "style='width:90%;'") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"),
+                full_width = F) %>%
+  add_footnote(c("Source: Vella and Verbeek (1998), National Longitudinal Survey (NLS Youth Sample)",
+                 "Note: Analysis based on Mahalanobis distance without a caliper and without replacement."))
+```
+
+```{r}
+# Print the initial table
+initial_covariate_balance_table
+```
+
+```{r}
+# Print the matcehd table
+matched_covariate_balance_table
+```
+
+Looking at the means and standard deviations of the covariates in both
+samples, we observe that the matched sample has improved balance
+compared to the initial sample. Specifically:
+
+-   **Years of Schooling:** The mean and standard deviation of years of
+    schooling are closer between the two groups in the matched sample
+    compared to the initial sample.
+
+-   **Work Experience:** Similar improvements are seen in the mean and
+    standard deviation of work experience.
+
+-   **Rural Area:** The proportions and standard deviations of
+    individuals living in rural areas are identical between the treated
+    and control groups in both samples.
+
+Overall, the matched sample demonstrates better balance across
+covariates, indicating that the matching process has effectively reduced
+covariate imbalance between the treated and control groups.
+
+### [5. Support Problem Analysis]{.smallcaps}
+
+**Is our matching exercise in part 3 prone to support problem? Calculate
+the percentage of treated subjects for whom a control has been found.
+Given this, is our estimate still consistent for ATT?**
+
+In this part, we assess whether the matching exercise is prone to the
+support problem. The support problem occurs when there are treated
+subjects without suitable controls, which can affect the consistency of
+the treatment effect estimate.
+
+```{r}
+# Calculate the percentage of treated subjects for whom a control has been found
+
+# Get the number of treated subjects who have been matched
+treated_count_0 <- nrow(match.data(pair_matching_model, "treated"))
+
+# Get the total number of subjects who received treatment
+total_subjects_treated_count <- nrow(VV98[VV98$UnionMember == 1, ])
+
+# Calculate the percentage of treated subjects who have been matched with a control
+percentage_matched_no_caliper <- treated_count_0 / total_subjects_treated_count * 100
+```
+
+```{r}
+# Create a formatted output for the results
+result_message <- paste("Percentage of treated subjects with controls:", round(percentage_matched_no_caliper, 2), "%")
+
+# Check if the estimate for ATT is still consistent based on the percentage of matched treated subjects
+consistency_message <- ifelse(percentage_matched_no_caliper < 100, 
+                              "Our estimate for ATT might not be fully consistent due to the support problem.",
+                              "Our estimate for ATT is likely to be consistent.")
+
+# Create HTML content
+html_content <- tags$div(
+  style = "text-align: center;", # This will center all the content in the div
+  tags$h5(style = "font-weight: bold;", "Support Problem Analysis"), # This will bold the title
+  tags$p(result_message),
+  tags$p(consistency_message)
+)
+
+# Print the HTML content
+browsable(html_content)
+```
+
+The analysis reveals that there are twice as many controls available for
+treated subjects, implying an excess of potential matches. However,
+despite this surplus, the estimate for the Average Treatment Effect on
+the Treated (ATT) is considered likely to be consistent.
+
+### [6. Pair Matching Analysis: Caliper 1]{.smallcaps}
+
+**Under pair matching, on a Mahalanobis distance, with a caliper of 1
+and without replacement, what is the treatment effect of union
+membership on wages of the treated subjects (ATT)?**
+
+In this part, we conduct pair matching analysis with a caliper of 1 to
+estimate the treatment effect of union membership on wages of the
+treated subjects (ATT).
+
+```{r}
+# Define the model for pair matching with Mahalanobis distance and a caliper of 1
+pair_matching_model_caliper1 <- matchit(UnionMember ~ YearsOfSchooling + WorkExperience,
+                                        data = VV98,
+                                        method = "nearest",
+                                        link = "cauchit",
+                                        distance = "mahalanobis",
+                                        exact = ~ RuralArea + NorthEastRegion + NorthCentralRegion + SouthernRegion + AgricultureSector + MiningSector + ConstructionSector + TradeSector + TransportationSector + FinanceSector + BusinessServiceSector + PersonalServiceSector + EntertainmentSector + ManufacturingSector + ProfessionalServiceSector + PublicAdministrationSector,
+                                        caliper = c(YearsOfSchooling = 1, WorkExperience = 1), # Specify named caliper entries
+                                        std.caliper = c(FALSE, FALSE),
+                                        replace = FALSE)
+
+# Perform the pair matching with caliper 1
+matched_pairs_caliper1 <- match.data(pair_matching_model_caliper1)
+
+# Calculate the ATT by comparing wages between matched pairs with caliper 1
+treatment_effect_union_membership_caliper1 <- with(matched_pairs_caliper1, mean(HourlyWageLog[UnionMember == 1]) - mean(HourlyWageLog[UnionMember == 0]))
+
+# Create the table with the results for pair matching with caliper 1
+att_result_table_caliper1 <- knitr::kable(data.frame(TreatmentEffectATT = treatment_effect_union_membership_caliper1),
+                                          caption = "<center>Treatment Effect of Union Membership on Wages with Caliper 1<center>",
+                                          align = 'c',
+                                          digits = 3,
+                                          col.names = c("Average Treatment Effect on the Treated (ATT)"),
+                                          format = "html",
+                                          table.attr = "style='width:70%; margin:auto;'") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"),
+                full_width = F,
+                position = "center") %>%
+  add_header_above(c(" " = 1)) %>%
+  add_footnote(c("Source: Vella and Verbeek (1998), National Longitudinal Survey (NLS Youth Sample)",
+                 "Note: Analysis based on Mahalanobis distance with a caliper of 1 and without replacement."))
+
+# Print the ATT result table for pair matching with caliper 1
+att_result_table_caliper1
+
+
+```
+
+### [7. Optimizing Matching Schemes]{.smallcaps}
+
+**Compare the quality of covariate balance generated by the matching
+scheme in part 3 with part 6 . Which one is better? Also compare them
+regarding the percentage of treated subjects used in estimation. Explain
+the trade-off involved.**
+
+```{r}
+# Calculate covariate balance for pair matching with caliper 1
+pair_matching_caliper1_covariate_balance <- matched_pairs_caliper1 %>%
+  group_by(UnionMember) %>%
+  summarise(
+    MeanYearsOfSchooling = mean(YearsOfSchooling, na.rm = TRUE),
+    SdYearsOfSchooling = sd(YearsOfSchooling, na.rm = TRUE),
+    MeanWorkExperience = mean(WorkExperience, na.rm = TRUE),
+    SdWorkExperience = sd(WorkExperience, na.rm = TRUE),
+    MeanRuralArea = mean(RuralArea, na.rm = TRUE),
+    SdRuralArea = sd(RuralArea, na.rm = TRUE)
+  ) %>%
+  pivot_longer(
+    cols = -UnionMember,
+    names_to = "measure",
+    values_to = "value"
+  ) %>%
+  pivot_wider(
+    names_from = UnionMember,
+    values_from = value,
+    names_glue = "{.value}_{UnionMember}"
+  )
+```
+
+```{r}
+# Table for covariate balance of pair matching without caliper
+covariate_balance_table_no_caliper <- knitr::kable(matched_covariate_balance,
+                                                  caption = "<center>Covariate Balance for Pair Matching (No Caliper)<center>", 
+                                                  align = 'c',
+                                                  digits = 3,
+                                                  format = "html",
+                                                  table.attr = "style='width:90%;'") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"),
+                full_width = F) %>%
+  add_footnote("Source: Vella and Verbeek (1998), National Longitudinal Survey (NLS Youth Sample)")
+
+# Print the covariate balance table for pair matching without caliper
+covariate_balance_table_no_caliper
+
+
+```
+
+```{r}
+# Table for covariate balance of pair matching with caliper 1
+covariate_balance_table_caliper1 <- knitr::kable(pair_matching_caliper1_covariate_balance,
+                                                  caption = "<center>Covariate Balance for Pair Matching (Caliper = 1)<center>", 
+                                                  align = 'c',
+                                                  digits = 3,
+                                                  format = "html",
+                                                  table.attr = "style='width:90%;'") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"),
+                full_width = F) %>%
+  add_footnote("Source: Vella and Verbeek (1998), National Longitudinal Survey (NLS Youth Sample)")
+
+# Print the covariate balance table for pair matching with caliper 1
+covariate_balance_table_caliper1
+
+```
+
+```{r}
+# Calculate the percentage of treated subjects for whom a control has been found
+
+# Get the number of treated subjects who have been matched
+treated_count_1 <- nrow(match.data(pair_matching_model_caliper1, "treated"))
+
+# Get the total number of subjects who received treatment
+total_subjects_treated_count <- nrow(VV98[VV98$UnionMember == 1, ])
+
+# Calculate the percentage of treated subjects who have been matched with a control
+percentage_matched_controls_caliper1 <- treated_count_1 / total_subjects_treated_count * 100
+
+# Create formatted output for the results
+result_message_no_caliper <- paste("Percentage of treated subjects used in estimation without a caliper:", round(percentage_matched_no_caliper, 2), "%")
+result_message_caliper1 <- paste("Percentage of treated subjects used in estimation with a caliper of 1:", round(percentage_matched_controls_caliper1, 2), "%")
+
+# Create HTML content
+html_content <- tags$div(
+  style = "text-align: center;", # This will center all the content in the div
+  tags$h5(style = "font-weight: bold;", "Percentage of Treated Subjects Used in Estimation"), # This will bold the title
+  tags$p(result_message_no_caliper),
+  tags$p(result_message_caliper1)
+)
+
+# Print the HTML content
+browsable(html_content)
+
+```
+
+The results show a comparison of the covariate balance and estimation
+efficiency between two pair matching schemes:
+
+1.  Pair matching without a caliper (Part 3)
+
+2.  Pair matching with a caliper of 1 (Part 6)
+
+**Covariate Balance:**
+
+-   Both schemes achieve good covariate balance, with similar means and
+    standard deviations for the covariates (Years of Schooling, Work
+    Experience, and Rural Area) between the treatment and control
+    groups.
+
+-   However, the scheme with a caliper of 1 (Part 6) shows slightly
+    better balance, with smaller standard deviations for Years of
+    Schooling and Work Experience.
+
+**Estimation Efficiency:**
+
+-   The scheme without a caliper (Part 3) uses 86.01% of the treated
+    subjects in estimation, while the scheme with a caliper of 1 (Part
+    6)  uses only 65.73% of the treated subjects.
+-   This indicates that the scheme with a caliper of 1 is more
+    restrictive, discarding more treated subjects from the estimation
+    due to the caliper constraint.
+
+**Trade-off:**
+
+-   The trade-off is between covariate balance and estimation
+    efficiency.
+
+-   The scheme with a caliper of 1 achieves slightly better covariate
+    balance but at the cost of using fewer treated subjects in
+    estimation, which may lead to less precise estimates.
+
+-   In contrast, the scheme without a caliper uses more treated
+    subjects, potentially leading to more precise estimates, but may
+    have slightly worse covariate balance.
+
+### [8. Pair Matching Analysis: Caliper 0.01]{.smallcaps}
+
+**Under pair matching, using the propensity score as distance, with a
+caliper of 0.01 and without replacement, calculate ATT.**
+
+In this part, we conduct pair matching analysis with a caliper of 0.01
+to estimate the treatment effect of union membership on wages of the
+treated subjects (ATT).
+
+```{r}
+# Define the model for pair matching with propensity score and a caliper of 0.01
+pair_matching_model_caliper_001 <- matchit(UnionMember ~ YearsOfSchooling + WorkExperience,
+                                            data = VV98,
+                                            method = "nearest",
+                                            distance = "glm",
+                                            link = "cauchit",
+                                            caliper = c(YearsOfSchooling = 0.01, WorkExperience = 0.01), # Specify named caliper entries
+                                            std.caliper = c(FALSE, FALSE),
+                                            exact = ~ RuralArea + NorthEastRegion + NorthCentralRegion + SouthernRegion + AgricultureSector + MiningSector + ConstructionSector + TradeSector + TransportationSector + FinanceSector + BusinessServiceSector + PersonalServiceSector + EntertainmentSector + ManufacturingSector + ProfessionalServiceSector + PublicAdministrationSector,
+                                            replace = FALSE)
+
+# Perform the pair matching with caliper 0.01
+matched_pairs_caliper_001 <- match.data(pair_matching_model_caliper_001)
+
+# Calculate the ATT by comparing wages between matched pairs with caliper 0.01
+treatment_effect_union_membership_caliper_001 <- with(matched_pairs_caliper_001, mean(HourlyWageLog[UnionMember == 1]) - mean(HourlyWageLog[UnionMember == 0]))
+
+# Create the table with the results for pair matching with caliper 0.01
+att_result_table_caliper_001 <- knitr::kable(data.frame(TreatmentEffectATT = treatment_effect_union_membership_caliper_001),
+                                              caption = "<center>Treatment Effect of Union Membership on Wages with Caliper 0.01<center>",
+                                              align = 'c',
+                                              digits = 3,
+                                              col.names = c("Average Treatment Effect on the Treated (ATT)"),
+                                              format = "html",
+                                              table.attr = "style='width:70%; margin:auto;'") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"),
+                full_width = F,
+                position = "center") %>%
+  add_header_above(c(" " = 1)) %>%
+  add_footnote(c("Source: Vella and Verbeek (1998), National Longitudinal Survey (NLS Youth Sample)",
+                 "Note: Analysis based on propensity score with a caliper of 0.01 and without replacement."))
+
+# Print the ATT result table for pair matching with caliper 0.01
+att_result_table_caliper_001
+```
+
+### [9. Optimizing Matching Schemes]{.smallcaps}
+
+**Compare the resulting covariate balance with that of part 3. Also
+compare them regarding the percentage of treated subjects for whom a
+control has been found. According to these comparisons, which one do you
+prefer? Argue.**
+
+```{r}
+# Calculate covariate balance for pair matching with caliper 0.01 (Part 8)
+pair_matching_caliper_001_covariate_balance <- matched_pairs_caliper_001 %>%
+  group_by(UnionMember) %>%
+  summarise(
+    MeanYearsOfSchooling = mean(YearsOfSchooling, na.rm = TRUE),
+    SdYearsOfSchooling = sd(YearsOfSchooling, na.rm = TRUE),
+    MeanWorkExperience = mean(WorkExperience, na.rm = TRUE),
+    SdWorkExperience = sd(WorkExperience, na.rm = TRUE),
+    MeanRuralArea = mean(RuralArea, na.rm = TRUE),
+    SdRuralArea = sd(RuralArea, na.rm = TRUE)
+  ) %>%
+  pivot_longer(
+    cols = -UnionMember,
+    names_to = "measure",
+    values_to = "value"
+  ) %>%
+  pivot_wider(
+    names_from = UnionMember,
+    values_from = value,
+    names_glue = "{.value}_{UnionMember}"
+  )
+# Create tables for covariate balance comparison
+covariate_balance_table_part3 <- knitr::kable(initial_covariate_balance,
+                                              caption = "<center>Covariate Balance for Pair Matching (No Caliper)<center>", 
+                                              align = 'c',
+                                              digits = 3,
+                                              format = "html",
+                                              table.attr = "style='width:90%;'") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"),
+                full_width = F) %>%
+  add_footnote("Source: Vella and Verbeek (1998), National Longitudinal Survey (NLS Youth Sample)")
+
+covariate_balance_table_part8 <- knitr::kable(pair_matching_caliper_001_covariate_balance,
+                                              caption = "<center>Covariate Balance for Pair Matching (Caliper = 0.01)<center>", 
+                                              align = 'c',
+                                              digits = 3,
+                                              format = "html",
+                                              table.attr = "style='width:90%;'") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"),
+                full_width = F) %>%
+  add_footnote("Source: Vella and Verbeek (1998), National Longitudinal Survey (NLS Youth Sample)")
+```
+
+```{r}
+# Print the tables for covariate balance comparison
+covariate_balance_table_part3
+```
+
+```{r}
+# Print the tables for covariate balance comparison
+covariate_balance_table_part8
+```
+
+```{r}
+# Calculate the percentage of treated subjects for whom a control has been found
+
+# Get the number of treated subjects who have been matched
+treated_count_001 <- nrow(match.data(pair_matching_model_caliper_001, "treated"))
+
+# Get the total number of subjects who received treatment
+total_subjects_treated_count <- nrow(VV98[VV98$UnionMember == 1, ])
+
+# Calculate the percentage of treated subjects who have been matched with a control
+percentage_matched_controls_caliper001 <- treated_count_001 / total_subjects_treated_count * 100
+
+# Create formatted output for the results
+result_message_no_caliper <- paste("Percentage of treated subjects used in estimation without a caliper:", round(percentage_matched_no_caliper, 2), "%")
+result_message_caliper001 <- paste("Percentage of treated subjects used in estimation with a caliper of 0.01:", round(percentage_matched_controls_caliper001, 2), "%")
+
+# Create HTML content
+html_content <- tags$div(
+  style = "text-align: center;", # This will center all the content in the div
+  tags$h5(style = "font-weight: bold;", "Percentage of Treated Subjects Used in Estimation"), # This will bold the title
+  tags$p(result_message_no_caliper),
+  tags$p(result_message_caliper001)
+)
+
+# Print the HTML content
+browsable(html_content)
+
+```
+
+1.  **Covariate Balance:**
+
+    -   Without a caliper, the matching achieves a better balance across
+        covariates, as evidenced by the closer means and standard
+        deviations between the treated and control groups.
+
+    -   With a caliper of 0.01, while the balance is still acceptable,
+        there are cases where the balance is not as tight as without a
+        caliper.
+
+2.  **Percentage of Treated Subjects Used in Estimation:**
+
+    -   Without a caliper, a higher percentage (86.01%) of treated
+        subjects is utilized in the estimation, providing a more
+        comprehensive analysis.
+
+    -   With a caliper of 0.01, the percentage decreases significantly
+        to 30.07%, indicating a substantial reduction in the sample
+        size, which might lead to less precise estimates.
+
+**Conclusion:**
+
+Considering the trade-offs between covariate balance and sample size,
+the matching scheme without a caliper seems preferable.
+
+## [Acknowledgment]{.smallcaps}
+
+This document’s YAML header and output formatting were adapted from
+Amirhossein Beykian’s code, with some modifications. A heartfelt thank
+you to Amirhossein Beykian for sharing his work, which has significantly
+contributed to the clarity, readability, and overall aesthetic quality
+of this document. His keen eye for design and willingness to share
+knowledge and resources are deeply appreciated, and have helped to
+elevate the learning experience for this assignment.
+
+## [References]{.smallcaps}
+
+@Vella1998

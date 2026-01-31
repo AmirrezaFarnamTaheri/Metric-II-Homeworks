@@ -1,0 +1,907 @@
+---
+title: "Metrics II - Homework 7"
+author: "Farnam Taheri"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    theme: readable
+    highlight: kate
+    toc: true
+    toc_depth: 4
+    toc_float: true
+    df_print: paged
+    code_folding: hide
+    css: styles.css
+    includes:
+      before_body: navbar.html
+editor_options:
+  markdown:
+    wrap: 72
+---
+
+```{r setup, warning=FALSE, message=FALSE}
+# Setup chunk to load required packages and set global options
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(cache = TRUE)
+
+# Load necessary libraries
+library(DT)          # Table display
+library(lubridate)   # Date handling
+library(dplyr)       # Data manipulation
+library(ggplot2)     # Data visualization
+library(plm)         # Panel data models
+library(lmtest)      # Diagnostic tests for linear models
+library(sandwich)    # Robust standard errors
+library(stargazer)   # To create regression tables
+library(plotly)      # Interactive visulization
+library(lme4)
+library(haven)
+library(tidyverse)
+library(knitr)
+```
+
+# [Part I: The COVID-19 Pandemic and the Effectiveness of Lockdown]{.smallcaps} {#part1}
+
+**Consider the following model:**
+$$covid\_cases_{it} = β_0 + β_1 stringency\_index_{it} + ϵ_{it} (1)$$
+**where the variable** $covid_cases_{it}$ **measures pandemic situation
+in the** $i$**-th country,** $t$ **is the time period,**
+$stringency\_index_{it}$ **is the so-called stringency index and it
+measures policy responses that governments have taken to react the
+COVID-19 pandemic (higher value is related to a larger number of
+policies or stricter policies) and** $ϵ_{it}$ **is the error term.**
+
+## [Preliminaries]{.smallcaps}
+
+### Define the Required Functions
+
+```{r}
+hausman_test <- function(fe_model, re_model) {
+  # Conduct the Hausman test
+  hausman_test <- phtest(fe_model, re_model)
+  
+  # Round the p-value to four digits
+  rounded_p_value <- round(hausman_test$p.value, 4)
+  
+  # Determine interpretation based on the p-value
+  if (hausman_test$p.value < 0.05) {
+    interpretation <- paste(
+      "The Hausman test indicates a significant difference between the fixed effects (FE) and random effects (RE) models (p-value =",
+      rounded_p_value, 
+      "). Given the low p-value (< 0.05), we reject the null hypothesis that the RE model is consistent. This suggests that the FE model is preferred, implying that there are likely unobserved time-invariant variables correlated with the explanatory variables. These unobserved variables may introduce bias in the RE model, making the FE model a more reliable choice for our analysis."
+    )
+  } else {
+    interpretation <- paste(
+      "The Hausman test shows no significant difference between the fixed effects (FE) and random effects (RE) models (p-value =",
+      rounded_p_value,
+      "). With a p-value greater than 0.05, we fail to reject the null hypothesis, indicating that the RE model is not inconsistent. This suggests that either the FE or RE model could be used. However, if there are concerns about unobserved time-invariant variables correlating with the explanatory variables, the FE model might still be preferred to avoid potential biases."
+    )
+  }
+  
+  # HTML output
+  cat("<p><strong><center>Hausman Test Results</center></strong></p>",
+      "<p><strong>P-value:</strong>", rounded_p_value,
+      "<br><strong>Interpretation:</strong>", interpretation, "</p>")
+}
+```
+
+```{r}
+bp_test <- function(pooled_model) {
+
+  # Conduct the BP test
+  bp_test <- plmtest(pooled_model, type = "bp")
+  
+  # Round the p-value to four digits
+  rounded_p_value <- bp_test$p.value
+  
+  # Determine interpretation based on the p-value
+  if (bp_test$p.value < 0.05) {
+    interpretation <- paste(
+      "The Breusch-Pagan test indicates significant cross-state heterogeneity (p-value =",
+      rounded_p_value,
+      "). Given the low p-value (< 0.05), we reject the null hypothesis of no cross-state heterogeneity. This suggests that the random effects model is more appropriate than the pooled OLS model, as it accounts for unobserved effects that vary across states."
+    )
+  } else {
+    interpretation <- paste(
+      "The Breusch-Pagan test shows no significant cross-state heterogeneity (p-value =",
+      rounded_p_value,
+      "). With a p-value greater than 0.05, we fail to reject the null hypothesis, indicating that the pooled OLS model may be sufficient for the data. However, this does not rule out the possibility of heterogeneity; it simply suggests that the test did not detect it at the chosen significance level."
+    )
+  }
+  
+  # HTML output
+  cat("<p><strong><center>Breusch-Pagan Test Results</center></strong></p>",
+      "<p><strong>P-value:</strong>", rounded_p_value,
+      "<br><strong>Interpretation:</strong>", interpretation, "</p>")
+}
+
+```
+
+```{r}
+#' Generate an Interactive Table Using DT
+#'
+#' This function generates an interactive table using the DT package.
+#'
+#' @param data A data frame to display.
+#' @param caption The caption for the table (default: NULL).
+#' @param col_names Column names for the table (default: NULL).
+#' @param options List of options for the DT::datatable function (default: list(pageLength = 5, scrollX = TRUE)).
+#' @param row_colors Row colors for the table (default: NULL).
+#' @param note Note to add below the table (default: NULL).
+#' @param footnote Footnote to add below the table (default: NULL).
+#' 
+#' @return Interactive table.
+#' @examples
+#' generate_interactive_table(mtcars, caption = "Car Dataset")
+generate_interactive_table <- function(data, caption = NULL, col_names = NULL,
+                                       options = list(pageLength = 5, scrollX = TRUE),
+                                       row_colors = NULL, note = NULL, footnote = NULL) {
+  if (!is.data.frame(data)) stop("Input data must be a data frame.")
+  
+  table <- datatable(data, caption = htmltools::tags$caption(
+    style = 'caption-side: top; text-align: center;', caption),
+    colnames = col_names, options = options)
+  
+  if (!is.null(row_colors)) {
+    table <- table %>% formatStyle(0, target = 'row', backgroundColor = row_colors)
+  }
+  
+  if (!is.null(note)) {
+    table <- table %>% formatStyle(columns = 1:ncol(data), valueColumns = note, fontSize = '80%')
+  }
+  
+  if (!is.null(footnote)) {
+    table <- table %>% formatStyle(columns = 1:ncol(data), valueColumns = footnote, fontSize = '80%', italic = TRUE)
+  }
+  
+  return(table)
+}
+
+```
+
+### Set the working directory
+
+```{r message=FALSE, warning=FALSE}
+# Set the working directory to the location of the data files
+setwd("./Data")
+
+# Assign the working directory to a variable for future reference
+working_dir <- getwd()
+```
+
+### Load Data
+
+First, we download the latest data related to COVID-19 and the
+stringency index from the Our World in Data dataset.
+
+```{r message=FALSE, warning=FALSE}
+# Read the CSV file from the working directory and Convert to tibble for better readability
+covid_data <- as_tibble(read.csv("./Data/owid-covid-data.csv"))
+```
+
+```{r}
+# Convert 'date' column to Date type
+covid_data <- covid_data %>%
+  mutate(date = as.Date(date, format="%Y-%m-%d"))
+
+# Aggregate data by month while retaining additional relevant columns
+covid_data <- covid_data %>%
+  # Create a new column for the month
+  mutate(month = floor_date(date, "month")) %>%
+  # Group by location and month
+  group_by(location, month) %>%
+  # Summarize the data by aggregating relevant columns
+  summarize(
+    new_cases_smoothed = sum(new_cases_smoothed, na.rm = TRUE),
+    new_cases = sum(new_cases, na.rm = TRUE),
+    positive_rate = mean(positive_rate, na.rm = TRUE),
+    tests_per_case = mean(tests_per_case, na.rm = TRUE),
+    total_vaccinations = sum(total_vaccinations, na.rm = TRUE),
+    people_vaccinated = sum(people_vaccinated, na.rm = TRUE),
+    people_fully_vaccinated = sum(people_fully_vaccinated, na.rm = TRUE),
+    total_boosters = sum(total_boosters, na.rm = TRUE),
+    new_vaccinations_smoothed = sum(new_vaccinations_smoothed, na.rm = TRUE),
+    stringency_index = mean(stringency_index, na.rm = TRUE),
+    population = first(population),
+    population_density = first(population_density),
+    median_age = first(median_age),
+    aged_65_older = first(aged_65_older),
+    aged_70_older = first(aged_70_older),
+    gdp_per_capita = first(gdp_per_capita),
+    extreme_poverty = first(extreme_poverty),
+    cardiovasc_death_rate = first(cardiovasc_death_rate),
+    diabetes_prevalence = first(diabetes_prevalence),
+    handwashing_facilities = first(handwashing_facilities),
+    hospital_beds_per_thousand = first(hospital_beds_per_thousand),
+    life_expectancy = first(life_expectancy),
+    human_development_index = first(human_development_index),
+    excess_mortality = sum(excess_mortality, na.rm = TRUE),
+    excess_mortality_cumulative = sum(excess_mortality_cumulative, na.rm = TRUE),
+    excess_mortality_cumulative_absolute = sum(excess_mortality_cumulative_absolute, na.rm = TRUE),
+    excess_mortality_cumulative_per_million = sum(excess_mortality_cumulative_per_million, na.rm = TRUE)
+  ) %>%
+  # Ungroup the data frame
+  ungroup()
+
+# Add a 'month' factor column for fixed effects
+covid_data <- covid_data %>%
+  mutate(month_factor = factor(month(month)))
+```
+
+```{r}
+# Display the first few rows of the dataset to understand its structure
+set.seed(42)    # Set seed for reproducibility
+covid_random_rows <- sample_n(covid_data, 250) # Pick 50 random rows from the dataset
+generate_interactive_table(covid_random_rows,
+                           col_names=colnames(covid_random_rows),
+                           row_colors = "aliceblue")
+```
+
+## [A. Expected Sign of]{.smallcaps} $β_1$
+
+**What signs would you expect on the coefficient** $β_1$**. Why?**
+
+The coefficient $β_1$ measures the relationship between the stringency
+index (policy responses) and the number of COVID-19 cases. We expect
+$β_1$ to be negative because stricter policies (higher stringency index)
+should lead to fewer COVID-19 cases. Stricter policies are intended to
+reduce the spread of the virus by limiting social interactions and
+mobility. Thus a higher stringency (stricter policies) should ideally
+lead to fewer cases due to reduced transmission.
+
+## [B. Choose Proxy Variable]{.smallcaps}
+
+**Download the latest data related to the COVID-19 pandemic and the
+stringency index. You can use the Our World in Data dataset ([link to
+the csv.
+file](https://covid.ourworldindata.org/data/owid-covid-data.csv "Covid Dataset"),
+[description of
+variables](https://github.com/owid/covid-19-data/blob/master/public/data/owid-covid-codebook.csv "Variables' description")).
+Choose proxy variable for** $covid\_cases_{it}$ **and discuss this
+choice.**
+
+Selecting the right proxy variable for $covid\_cases_{it}$ in Model (1)
+is crucial for understanding the evolving COVID-19 pandemic. Among
+available options, the `new_cases` metric stands out as a reliable
+choice. It directly reflects the current state of the pandemic in each
+country at any given time, making it a fundamental indicator of the
+virus's impact on populations. Integrating `new_cases` into the model
+provides timely insights into the pandemic's dynamics, essential for
+evaluating government responses.
+
+While `new_cases` is a good choice, comparing it with the
+`new_cases_smoothed` variable reveals some nuances. `New_cases_smoothed`
+offers benefits like stabilizing volatile data and addressing reporting
+errors through a 7-day smoothing process. This creates a more consistent
+trend in COVID-19 cases over time, facilitating comparisons across
+countries and analyzing the relationship with policy stringency.
+
+However, despite these advantages, the preference leans towards using
+the raw `new_cases` metric over `new_cases_smoothed.` This decision
+arises from concerns about potential autocorrelation when aggregating
+smoothed data on a monthly basis. Autocorrelation can bias estimates and
+inflate errors, especially when data is aggregated more frequently than
+originally collected. Opting for the raw `new_cases` metric helps avoid
+these issues, ensuring the analysis remains accurate and reliable.
+
+In conclusion, while both `new_cases` and `new_cases_smoothed` have
+their merits, the raw `new_cases` metric is the preferred choice for
+Model (1).
+
+## [C. Model Comparison]{.smallcaps}
+
+**Estimate the parameter of (1) using pooled regression as well as the
+RE and FE estimators. Remember about clustered standard errors. Are the
+estimates of** $β_1$ **in line with your expectations? Test the
+heterogeneity in the RE and FE models. Compare RE and FE models with the
+Hausman test.**
+
+#### Model Estimation
+
+First, we will estimate different models and analyze the models'
+results.
+
+```{r, results=FALSE}
+# Convert data to panel data frame
+  covid_pdata <- pdata.frame(covid_data, index = c("location", "month"))
+  
+# Estimate the extended model using pooled OLS
+pooled_model <- plm(
+  formula = new_cases ~ stringency_index,  # Specify the model formula
+  data = covid_pdata,                     # Provide the data
+  model = "pooling"                      # Use the pooling model (Pooled OLS)
+)
+  
+# Estimate the extended model using pooled OLS
+re_model <- plm(
+  formula = new_cases ~ stringency_index,
+  data = covid_pdata,                     
+  model = "random"                      # Use the random effect model 
+)
+  
+  
+  
+# Estimate the extended model using pooled OLS
+fe_model <- plm(
+  formula = new_cases ~ stringency_index,
+  data = covid_pdata,                  
+  model = "within"                      # Use the fixed effect model 
+)
+  
+# Compute clustered standard errors
+pooled_se <- coeftest(pooled_model,                   # Compute coefficient test
+                  vcov = vcovHC(                      # Using the robust covariance estimator
+                            pooled_model,             # Based on the pooled model
+                            type = "HC1",             # Type of robust covariance estimator
+                            cluster = "group")     # Clustering by country
+                      )
+
+re_se <- coeftest(re_model,
+              vcov = vcovHC(re_model, type = "HC1", cluster = "group")
+                           )
+fe_se <- coeftest(fe_model,
+              vcov = vcovHC(fe_model, type = "HC1", cluster = "group")
+                           )
+
+
+# Display results using stargazer
+stargazer_models <- stargazer( 
+  pooled_model, re_model, fe_model,                                    # Models to display
+  type = "html",                                                       # Output type as HTML
+  title = "<center>COVID-19 Cases and Stringency Index<center>",       # Title for the table
+  dep.var.labels = c("New COVID-19 Cases"),                            # Dependent variable label
+  column.labels = c("Pooled OLS", "Random Effects", "Fixed Effects"),  # Model names for columns
+  
+  covariate.labels = c(              # Labels for covariates
+                       "Constant"="Constant",  
+                       "stringency_index"="Stringency Index",
+                       "population_density"="Population Density",
+                       "median_age"="Median Age",
+                       "month_factor"="Month Factor"), 
+
+  digits = 2,                        # Number of digits to display
+  align = TRUE,                      # Align columns
+  style = "AER",                     # Use AER style
+  intercept.bottom = FALSE,          # Display intercepts at the top
+  intercept.top = TRUE,              # Display intercepts at the bottom
+  se = list(                         # Clustered standard errors
+    pooled_se[, 2], re_se[, 2], fe_se[, 2]
+    ) 
+)
+```
+
+```{r echo=FALSE, results='asis'}
+cat("<center>",stargazer_models,"<center>")
+```
+
+#### Heterogeneity Test
+
+Now we will perform the Hausman test in oreder tocompare **fixed
+effect** and **random** **effect** models.
+
+```{r, results='asis'}
+# Conducting the Hausman test utilizing the defined function
+hausman_test(fe_model, re_model)
+```
+
+## [D. Models with Control Varialbes]{.smallcaps}
+
+**Choose at least two control variables that potentially affect the
+outcome variable and extend (1) by the selected variables. What sign
+would you expect on the related coefficients? Estimate the extended
+regression with pooled regression as well as the RE and FE estimators.
+Are the estimates of** $β_1$ **in line with your expectations? Test the
+heterogeneity in the RE and FE models. Compare RE and FE models with the
+Hausman test.**
+
+### Model Estimation
+
+First, we will estimate different models and analyze the models'
+results.
+
+```{r, results=FALSE}
+
+# Convert data to panel data frame with the new control variables included
+  covid_pdata <- pdata.frame(covid_data, index = c("location", "month"))
+  
+  # Estimate the extended model using pooled OLS
+  pooled_model_extended <- plm(
+    formula = new_cases_smoothed ~ stringency_index + population_density + gdp_per_capita + median_age,  # Specify the model formula
+    data = covid_pdata,                     # Provide the data
+    model = "pooling"                      # Use the pooling model (Pooled OLS)
+  )
+  
+  # Estimate the extended model using pooled OLS
+  re_model_extended <- plm(
+    formula = new_cases_smoothed ~ stringency_index + population_density + gdp_per_capita + median_age,  
+    data = covid_pdata,                     
+    model = "random"                      # Use the random effect model 
+  )
+  
+  # Estimate the extended model using pooled OLS
+  fe_model_extended <- plm(
+    formula = new_cases_smoothed ~ stringency_index + population_density + gdp_per_capita + median_age,
+    data = covid_pdata,                  
+    model = "within"                      # Use the fixed effect model 
+  )
+  
+# Compute clustered standard errors
+pooled_se_extended <- coeftest(pooled_model_extended,
+                           vcov = vcovHC(pooled_model_extended, type = "HC1", cluster = "group")
+)
+re_se_extended <- coeftest(re_model_extended,
+                           vcov = vcovHC(re_model_extended, type = "HC1", cluster = "group")
+                           )
+fe_se_extended <- coeftest(fe_model_extended,
+                           vcov = vcovHC(fe_model_extended, type = "HC1", cluster = "group")
+                           )
+ 
+# Display results using stargazer
+stargazer_models_extended <- stargazer(
+  pooled_model_extended, re_model_extended, fe_model_extended,
+  
+  title = "<center>COVID-19 Cases and Stringency Index<center>", 
+  dep.var.labels = c("New COVID-19 Cases"),
+  column.labels = c("Pooled OLS", "Random Effects", "Fixed Effects"),
+
+  covariate.labels = c("Constant"="Constant",
+                       "stringency_index"="Stringency Index",
+                       "population_density"="Population Density",
+                       "gdp_per_capita"="GDP per Capita",
+                       "median_age"="Median Age",
+                       "month_factor"="Month Factor"), 
+  
+  type = "html", digits = 2, align = TRUE, style = "AER",
+  intercept.bottom = FALSE, intercept.top = TRUE,
+  se = list(pooled_se_extended[, 2], re_se_extended[, 2], fe_se_extended[, 2])
+)
+```
+
+```{r echo=FALSE, results='asis'}
+cat("<center>",stargazer_models_extended,"<center>")
+```
+
+### Heterogeneity Test
+
+Now we will perform the Hausman test in oreder tocompare **fixed
+effect** and **random** **effect** models.
+
+```{r, results='asis'}
+# Conducting the Hausman test utilizing the defined function
+hausman_test(fe_model_extended, re_model_extended)
+```
+
+## [E. Time Effect]{.smallcaps}
+
+**Add time effects to the previous regressions and re-estimate
+parameters. Is there any trend effect? If so, try to visualize this
+effect for all models. Once again, are the estimates of** $β_1$ **in
+line with your expectations? Test the heterogeneity in the RE and FE
+models. Compare RE and FE models with the Hausman test.**
+
+### Model Estimation
+
+```{r, results=FALSE}
+# Estimate the extended model with time effects using pooled OLS
+pooled_model_time <- plm(
+  formula = new_cases ~ stringency_index + population_density + gdp_per_capita + factor(month),
+  data = covid_pdata,
+  model = "pooling"
+)
+
+# Estimate the extended model with time effects using fixed effects
+fe_model_time <- plm(
+  formula = new_cases ~ stringency_index + population_density + gdp_per_capita + factor(month),
+  data = covid_pdata,
+  model = "within"
+)
+
+# Estimate the extended model with time effects using random effects with lme4
+re_model_time <- lmer(
+  formula = new_cases ~ stringency_index + population_density + gdp_per_capita + factor(month) + (1 | location),
+  data = covid_data
+)
+
+# Compute clustered standard errors
+pooled_se_time <- coeftest(pooled_model_time, 
+                           vcov = vcovHC(pooled_model_time, type = "HC1", cluster = "group")
+)
+
+fe_se_time <- coeftest(fe_model_time, 
+                       vcov = vcovHC(fe_model_time, type = "HC1", cluster = "group")
+)
+
+
+# Display results using stargazer
+stargazer_models_time <- stargazer(
+  pooled_model_time, fe_model_time, re_model_time,
+  title = "<center>Extended Models with Time Effects: COVID-19 Cases and Stringency Index<center>", 
+  dep.var.labels = c("New COVID-19 Cases"), 
+  column.labels = c("Pooled OLS", "Fixed Effects", "Random Effects"), 
+  covariate.labels = c("Constant", "Stringency Index", "Population Density", "GDP per Capita", "Month Factor"), 
+  type = "html", digits = 2, align = TRUE, style = "AER", 
+  intercept.bottom = FALSE, intercept.top = TRUE,
+  se = list(pooled_se_time[, 2], fe_se_time[, 2])
+)
+```
+
+```{r echo=FALSE, results='asis'}
+cat("<center>",stargazer_models_time,"<center>")
+```
+
+## [F. Discussion of Limitations and Potential Extensions]{.smallcaps}
+
+### **Limitations:**
+
+1.  **Omitted Variable Bias:** The model may not account for all
+    relevant factors that influence COVID-19 cases. For instance,
+    variables like healthcare system quality, public health literacy,
+    and international travel could significantly impact the spread of
+    the virus but may not be included in the analysis.
+
+2.  **Measurement Error:** The data on COVID-19 cases and stringency
+    index might suffer from reporting errors. Different countries have
+    varying testing capacities and reporting standards, which can lead
+    to underreporting or overreporting of cases.
+
+3.  **Cross-sectional Dependence:** The assumption that observations
+    across countries are independent might be violated. Countries may
+    influence each other's pandemic response or share common shocks,
+    such as new virus variants, which can lead to spurious results.
+
+4.  **Nonlinearity and Threshold Effects:** The relationship between
+    stringency measures and COVID-19 cases might be nonlinear. For
+    example, there could be threshold effects where stringency measures
+    only become effective after surpassing a certain level.
+
+5.  **Endogeneity:** There may be reverse causality where the number of
+    COVID-19 cases influences policy stringency. Additionally,
+    unobserved factors could affect both the stringency index and
+    COVID-19 cases, leading to biased estimates.
+
+    **Reverse Causality:**
+
+    -   If a government increases the stringency of its policies in
+        response to a rise in COVID-19 cases, then the number of cases
+        is influencing the policy response. This creates a situation
+        where the cause and effect are influencing each other, making it
+        difficult to determine the direction of causality.
+
+    **Unobserved Factors:**
+
+    -   The effectiveness of stringent policies might be influenced by
+        public behavior and compliance, which are not directly observed
+        or measured. If people voluntarily engage in social distancing
+        and reduce mobility even before official policies are
+        implemented, the stringency index might not capture the actual
+        level of social distancing taking place.
+
+6.  **Temporal Dynamics:** The model may not capture the dynamic nature
+    of the pandemic. The effects of policies on COVID-19 cases can have
+    time lags, and the impact may vary over different stages of the
+    pandemic.
+
+### **Potential Extensions:**
+
+1.  **Instrumental Variables (IV) Approach:** To address potential
+    endogeneity, an IV approach could be used where instruments are
+    variables that are correlated with the stringency index but not
+    directly with COVID-19 cases.
+
+2.  **Dynamic Panel Data Models:** Using lag models can help control for
+    unobserved heterogeneity and capture the lagged effects of policies.
+
+3.  **Spatial Econometric Models:** These models can account for
+    cross-sectional dependence and spillover effects between countries,
+    providing a more accurate representation of the pandemic's spread.
+
+4.  **Robustness Checks:** Conducting robustness checks using different
+    model specifications, time periods, and subsets of data can help
+    validate the findings.
+
+# [Part II: Demand for Cigarettes]{.smallcaps} {#part2}
+
+Baltagi and Li (1986) study a demand for cigarettes. Consider the subset
+of their dataset ([link to the dta.
+file](Cigarettes'%20Dataset "https://drive.google.com/file/d/1x5EDFL4JW72QdNuxZY_Kx7eSmgbFLhNR/view"))
+that contains data on 46 US states from 1963-1982. The following
+variables are available:
+
+• $state_{it}$ – the identification number of state
+
+• $year_{it}$ – the year,
+
+• $price_{it}$– price per pack of cigarettes (in nominal terms),
+
+• $cpi_{it}$ – consumer price index (1983=100),
+
+• $income_{it}$– per capita disposable income (in nominal terms),
+
+• $sales_{it}$ – cigarette sales in packs per capita.
+
+## [Preliminaries]{.smallcaps}
+
+```{r}
+# Load the dataset
+cig_data <- as_tibble(read_dta("./Data/Cigar.dta"))
+
+# Construct variables
+cig_data <- cig_data %>%
+  mutate(
+    ln_sales = log(sales),
+    ln_income = log(income / cpi * 100),
+    ln_price = log(price / cpi * 100)
+  )
+```
+
+## [A. Log-transformation]{.smallcaps}
+
+**At the first stage, consider the following econometric model
+describing demand for cigarettes:**
+
+$$\ln C_{it} = β_0 + β_1 ln Y_{it} + β_2 ln P_{it} + ϵ_{it} \quad (2)$$
+**where** $C_{it}$ is the consumption of cigarettes, $Y_{it}$ is the
+real disposable income per capita and $P_{it}$ is the real price per
+pack of cigarettes. Why the log transformation is useful here?
+
+The log transformation is useful for several reasons:
+
+1.  **Linearity**: The relationship between cigarette consumption,
+    income, and price may not be linear. By using a log-log model, we
+    can linearize a potentially multiplicative relationship. This means
+    that percentage changes in income or price are associated with
+    percentage changes in cigarette consumption, which can be modeled
+    using linear regression.
+
+2.  **Elasticity Interpretation**: In this context, the coefficients
+    $\beta_1$ and $\beta_2$ directly provide the elasticities of demand.
+    The income elasticity ($\beta_1$) indicates the percentage change in
+    cigarette consumption for a one percent change in real disposable
+    income per capita. Similarly, the price elasticity ($\beta_2$)
+    represents the percentage change in cigarette consumption for a one
+    percent change in the real price per pack of cigarettes. This is
+    particularly useful for policymakers and economists who are
+    interested in understanding how changes in economic factors affect
+    cigarette consumption.
+
+3.  **Heteroscedasticity**: Economic data often exhibit
+    heteroscedasticity, where the variance of the error term changes
+    across observations. Log transformation can mitigate this issue,
+    leading to more efficient and reliable estimates, as the variance of
+    the percentage changes is more likely to be constant.
+
+4.  **Normality**: The distribution of economic data can be skewed, with
+    a few large values. Log transformation helps in achieving a
+    distribution that is closer to normal, which is a key assumption in
+    many statistical methods, including regression analysis.
+
+5.  **Outliers**: Economic datasets can have outliers due to data entry
+    errors, unusual events, or structural changes. Log transformation
+    reduces the impact of outliers because it compresses the scale,
+    bringing the data points closer together and making the dataset more
+    homogenous.
+
+## [B. Appropriate Variables]{.smallcaps}
+
+**Based on the available dataset, propose and discuss the construction
+of variables that are able to identify empirically** $C_{it}$, $Y_{it}$
+and $P_{it}$.
+
+-   **Cigarette Consumption**: This variable can be identified using
+    `$sales_{it}$`, which represents cigarette sales in packs per
+    capita. Since the econometric model uses the natural logarithm of
+    cigarette consumption, we would take the log of `salesit` to
+    get$\ln(C_{it})$.
+
+-   **Real Disposable Income Per Capita**: The `$income_{it}$` variable
+    indicates per capita disposable income in nominal terms. To adjust
+    for inflation and convert it into real terms, we divide
+    `$income_{it}$` by `$cpi_{it}$` (Consumer Price Index) and multiply
+    by 100 (to reference the base year 1983=100). The natural logarithm
+    of this adjusted income gives us $\ln(Y\_{it})$.
+
+-   $P_{it}$ (Real Price Per Pack of Cigarettes): Similarly,
+    `$price_{it}$` provides the price per pack of cigarettes in nominal
+    terms. We adjust it for inflation by dividing `$price_{it}$` by
+    `$cpi_{it}$` and multiplying by 100. Taking the natural logarithm of
+    this adjusted price yields $\ln(P_{it})$.
+
+By transforming these variables into their logarithmic forms, we can
+analyze the elasticities and interpret the coefficients in the
+regression model more meaningfully.
+
+## [C. Elasticity Expectations]{.smallcaps}
+
+For the coefficients $\beta_1$ and $\beta_2$ in the demand equation:
+
+$$
+\ln(C_{it}) = \beta_0 + \beta_1 \ln(Y_{it}) + \beta_2 \ln(P_{it}) + \epsilon_{it}
+$$
+
+-   **Expectation for** $\beta_1$ (Income Elasticity): We would
+    generally expect a positive sign for \$\beta\_1 \$, as income
+    elasticity of demand for cigarettes is typically positive. This
+    means that as real disposable income increases, people can afford to
+    buy more cigarettes, leading to an increase in cigarette
+    consumption.
+
+-   **Expectation for** $\beta_2$ (Price Elasticity): Typically, the
+    sign for $\beta_2$ is expected to be negative, aligning with the law
+    of demand which posits that as the price of a good increases, the
+    quantity demanded decreases, all else being equal. Consequently, a
+    rise in the real price of cigarettes should result in reduced
+    cigarette consumption.
+
+However, it's important to note that if cigarettes are a Giffen good,
+the sign for $\beta_2$ could actually be positive. This counterintuitive
+scenario suggests that an increase in the real price of cigarettes might
+lead to higher cigarette consumption due to the dominant income effect
+overriding the substitution effect.
+
+## [D. Model Comparison]{.smallcaps}
+
+**Estimate the model using a pooled OLS, a RE estimator and FE
+estimator. Report all estimates in one table, interpret (remember that
+the variables are in logs) and discuss your results. Are they as you
+expected? Explain why these estimates differ.**
+
+### Model Estimation
+
+```{r, results=FALSE}
+# Model estimation
+cig_pooled_model <- plm(
+  formula = ln_sales ~ ln_income + ln_price,
+  data = cig_data,
+  model = "pooling"
+)
+
+cig_fe_model <- plm(
+  formula = ln_sales ~ ln_income + ln_price,
+  data = cig_data,
+  model = "within"
+)
+
+cig_re_model <- plm(
+  formula = ln_sales ~ ln_income + ln_price,
+  data = cig_data,
+  model = "random"
+)
+
+# Compute standard errors
+cig_pooled_se <- coeftest(cig_pooled_model, vcov = vcovHC(cig_pooled_model, type = "HC1", cluster = "group"))
+cig_fe_se <- coeftest(cig_fe_model, vcov = vcovHC(cig_fe_model, type = "HC1", cluster = "group"))
+cig_re_se <- coeftest(cig_re_model, vcov = vcovHC(cig_re_model, type = "HC1", cluster = "group"))
+
+# Display results using stargazer
+stargazer_models <- stargazer(
+  cig_pooled_model, cig_fe_model, cig_re_model,
+  title = "<center>Models of Cigarette Consumption<center>", 
+  dep.var.labels = c("Log of Cigarette Sales"), 
+  column.labels = c("Pooled OLS", "Fixed Effects", "Random Effects"), 
+  covariate.labels = c("Constant", "Log of Income", "Log of Price"), 
+  type = "html", digits = 2, align = TRUE, style = "AER", 
+  intercept.bottom = FALSE, intercept.top = TRUE,
+  se = list(cig_pooled_se[, 2], cig_fe_se[, 2], cig_re_se[, 2])
+)
+```
+
+```{r echo=FALSE, results='asis'}
+# Output the HTML code for the table
+cat("<center>", stargazer_models, "<center>")
+
+```
+
+### Result Analysis
+
+-   **Pooled OLS**: The constant term is significant and positive,
+    suggesting a base level of cigarette sales regardless of income or
+    price. The positive coefficient for income indicates that cigarette
+    sales increase as income increases. The negative price elasticity
+    suggests that sales decrease as prices rise, which is consistent
+    with the law of demand.
+
+-   **Fixed Effects**: The income coefficient is not significant,
+    indicating that within entities (such as individuals or regions),
+    changes in income do not significantly affect cigarette sales. The
+    negative price elasticity is significant and slightly less in
+    absolute value than in the pooled OLS, suggesting that within
+    entities, consumers are less responsive to price changes.
+
+-   **Random Effects**: The constant term is significant and higher than
+    in the pooled OLS. The income coefficient is again insignificant,
+    and the price elasticity is the same as in the fixed effects model,
+    suggesting that when accounting for random differences across
+    entities, income does not have a significant effect on cigarette
+    sales, but price changes do.
+
+The results might differ from expectations if cigarettes are a Giffen
+good, as discussed earlier, or if there are other factors affecting
+cigarette consumption that are not included in the model. The lack of
+significance for income in the fixed and random effects models suggests
+that other factors, possibly cultural or policy-related, may play a more
+substantial role in determining cigarette consumption than income alone.
+
+## [E. Lagrange Multiplier]{.smallcaps}
+
+**Test the hypothesis that there are no cross-state differences and test
+the presence of the cross-state heterogeneity using the Lagrange
+multiplier statistic. Do these results lead to the same conclusions?**
+
+```{r, results='asis'}
+bp_test(cig_pooled_model)
+```
+
+## [F. Hausman Test]{.smallcaps}
+
+**Perform Hausman’s test for the estimates obtained in (d) for the RE
+and FE model. Interpret this result.**
+
+## [G. Year Dummies]{.smallcaps}
+
+```{r, results=FALSE}
+# Convert the 'year' column to a factor with levels for each year
+cig_data$year <- factor(cig_data$year)
+
+# Use the 'model.matrix()' function to create dummy variables for each year
+# The base level (first year) is automatically excluded to prevent multicollinearity
+year_dummies <- model.matrix(~ year - 1, data = cig_data)
+
+# Bind the year dummy variables to the original dataset
+cig_data <- cbind(cig_data, year_dummies)
+
+# Re-estimate the FE model with year dummies
+cig_fe_model_year <- plm(
+  formula = ln_sales ~ ln_income + ln_price + year,
+  data = cig_data,
+  model = "within"
+)
+
+# Re-estimate the RE model with year dummies
+cig_re_model_year <- plm(
+  formula = ln_sales ~ ln_income + ln_price + year,
+  data = cig_data,
+  model = "random"
+)
+
+# Re-estimate the pooled OLS model with year dummies
+cig_pooled_model_year <- lm(
+  formula = ln_sales ~ ln_income + ln_price + year,
+  data = cig_data
+)
+
+# Compute standard errors for the pooled model with year dummies
+cig_pooled_se_year <- coeftest(cig_pooled_model_year, vcov = vcovHC(cig_pooled_model_year, type = "HC1", cluster = "group"))
+
+# Compute standard errors for the new models
+cig_fe_se_year <- coeftest(cig_fe_model_year, vcov = vcovHC(cig_fe_model_year, type = "HC1", cluster = "group"))
+cig_re_se_year <- coeftest(cig_re_model_year, vcov = vcovHC(cig_re_model_year, type = "HC1", cluster = "group"))
+
+
+# Display results using stargazer
+stargazer_models <- stargazer(
+  cig_pooled_model_year, cig_fe_model_year, cig_re_model_year,
+  title = "<center>Models of Cigarette Consumption with Year Dummies<center>", 
+  dep.var.labels = c("Log of Cigarette Sales"), 
+  column.labels = c("Pooled OLS with Year Dummies", "Fixed Effects with Year Dummies", "Random Effects with Year Dummies"), 
+  covariate.labels = c("Constant", "Log of Income", "Log of Price", "Year Dummies"), 
+  type = "html", digits = 2, align = TRUE, style = "AER", 
+  intercept.bottom = FALSE, intercept.top = TRUE,
+  se = list(cig_pooled_se_year[, 2], cig_fe_se_year[, 2], cig_re_se_year[, 2])
+)
+```
+
+```{r echo=FALSE, results='asis'}
+# Output the HTML code for the table
+cat("<center>", stargazer_models, "<center>")
+```
+
+## [H. Hausman Test]{.smallcaps}
+
+**Perform Hausman’s test for the estimates obtained in (g)? Discuss this
+result.**
+
+```{r results='asis'}
+hausman_test(cig_fe_model_year, cig_re_model_year)
+```

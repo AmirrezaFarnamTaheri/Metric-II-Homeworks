@@ -1,0 +1,23 @@
+Package: Farnam
+Type: Package
+Title: A Comprehensive Econometrics Library
+Version: 0.1.0
+Author: Your Name
+Maintainer: Your Name <your.email@example.com>
+Description: A package for comprehensive econometric analysis including panel data regression, GMM estimation, and interactive visualizations.
+License: MIT
+Depends: R (>= 3.5.0)
+Imports:
+    ggplot2,
+    plotly,
+    dplyr,
+    tidyr,
+    stargazer,
+    kableExtra,
+    DT,
+    plm,
+    tseries,
+    urca,
+    gmm,
+    htmltools
+RoxygenNote: 7.3.1

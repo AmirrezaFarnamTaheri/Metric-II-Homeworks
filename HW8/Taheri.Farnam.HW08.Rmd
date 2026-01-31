@@ -1,0 +1,1062 @@
+---
+title: "Metrics II - Homework 8"
+author: "Farnam Taheri"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    theme: readable
+    highlight: kate
+    toc: true
+    toc_depth: 4
+    toc_float: true
+    df_print: paged
+    code_folding: hide
+    css: styles.css
+    includes:
+      before_body: navbar.html
+editor_options:
+  markdown:
+    wrap: 72
+---
+
+```{r setup, warning=FALSE, message=FALSE, results=FALSE}
+# Setup chunk to load required packages and set global options
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(cache = TRUE)
+
+# Install necessary packages if not already installed
+if (!requireNamespace("devtools", quietly = TRUE)) install.packages("devtools")
+if (!requireNamespace("synthdid", quietly = TRUE)) devtools::install_github("synth-inference/synthdid")
+if (!requireNamespace("plotly", quietly = TRUE)) install.packages("plotly")
+if (!requireNamespace("DT", quietly = TRUE)) install.packages("DT")
+if (!requireNamespace("htmltools", quietly = TRUE)) install.packages("htmltools")
+if (!requireNamespace("stargazer", quietly = TRUE)) install.packages("stargazer")
+
+# Load the packages
+library(synthdid)
+library(plotly)
+library(DT)
+library(htmltools)
+library(stargazer)
+```
+
+# [Part I: Synthetic Control]{.smallcaps} {#part1}
+
+**In this exercise we implement the synthetic DID methods approach.
+Synthetic DID combines both the concepts of DID and synthetic control.
+In Stata, you should use the sdid package
+(<https://github.com/Daniel-Pailanir/sdid>) and in R use the synthdid
+package (<https://synth-inference.github.io/synthdid/>).**
+
+## [Preliminaries]{.smallcaps}
+
+### Define the Required Functions
+
+We will define functions for estimating synthetic control, computing
+standard errors, visualizing results, and generating interactive tables.
+
+#### Prepare Synthetic Data
+
+```{r}
+# Function to Prepare Data for Synthetic Control Analysis
+
+# This function takes a dataset and the names of the columns that represent units, time, outcomes, and treatment.
+# It formats the data into a structure suitable for synthetic control analysis using the synthdid package.
+prepare_synthetic_data <- function(data, unit_col, time_col, outcome_col, treatment_col) {
+  # Inform the user that data preparation is starting
+  message("Preparing data for synthetic control analysis...")
+  
+  # Attempt to prepare the data and handle any errors that may occur
+  tryCatch({
+    # Convert the data into the format required by the synthdid package
+    setup <- panel.matrices(data, unit = unit_col, time = time_col, outcome = outcome_col, treatment = treatment_col)
+    # Return the prepared data
+    return(setup)
+  }, error = function(e) {
+    # Provide a more informative error message if preparation fails
+    stop("An error occurred while preparing the data: ", e$message)
+  })
+}
+```
+
+#### Estimate Synthetic Control
+
+```{r}
+# Function to Estimate Synthetic Control with HTML Output
+
+# This function takes the prepared data and uses the synthdid_estimate function to estimate the synthetic control.
+# It provides an HTML output for interpretation of the results.
+estimate_synthetic_control <- function(setup, font_family = "Arial", font_size = "16px", color = "black") {
+  # Inform the user that the synthetic control estimation is starting
+  message("Estimating synthetic control...")
+  
+  # Attempt to estimate the synthetic control and handle any errors that may occur
+  tryCatch({
+    # Use the sc_estimate function from the synthdid package to estimate the synthetic control
+    synth_control <- sc_estimate(setup$Y, setup$N0, setup$T0)
+    
+    # Generate HTML output with inline CSS for styling
+    # The output includes a title and a paragraph with the point estimate
+    html_output <- paste0(
+      "<h2 style='font-family: ", font_family, "; color: ", color, "; font-size: 24px;'>Synthetic Control Estimation Results</h2>",
+      "<p style='font-family: ", font_family, "; color: ", color, "; font-size: ", font_size, ";'><strong>Point Estimate:</strong> ", 
+      round(synth_control, 3), "</p>",
+      "<p style='font-family: ", font_family, "; color: gray; font-size: 18px;'>This point estimate represents the counterfactual outcome that would have been observed in the absence of the treatment. It is calculated as a weighted average of the control units.</p>"
+    )
+    
+    # Print the HTML output to the console
+    cat(html_output)
+    
+    # Return the estimated synthetic control object
+    return(synth_control)
+  }, error = function(e) {
+    # Provide a more informative error message if estimation fails
+    stop("An error occurred during the estimation: ", e$message)
+  })
+}
+```
+
+#### Estimate Synthetic Diff-in-Diff
+
+```{r}
+# Function to Estimate SynthDID with HTML-formatted Interpretations and Styling Options
+estimate_synthdid <- function(setup, 
+                              font_family = "Arial", 
+                              font_size = "16px", 
+                              font_color = "black") {
+  # Inform the user that the SynthDID estimation is starting
+  message("Estimating SynthDID...")
+  
+  # Attempt to estimate the SynthDID and handle any errors that may occur
+  tryCatch({
+    # Use the synthdid_estimate function to estimate the synthetic control
+    synthdid_result <- synthdid_estimate(setup$Y, setup$N0, setup$T0)
+    
+    # Extract the estimate and weights from the result
+    estimate <- synthdid_result[1]
+    weights <- attr(synthdid_result, "weights")
+    
+    # Calculate effective sample sizes
+    effective_N0 <- sum(weights$omega)
+    effective_T0 <- sum(weights$lambda)
+    
+    # Create HTML-formatted interpretations based on the estimate
+    interpretation <- if (estimate < 0) {
+      "<p>The negative SynthDID estimate suggests a decrease in the outcome variable due to the treatment.</p>"
+    } else if (estimate > 0) {
+      "<p>The positive SynthDID estimate suggests an increase in the outcome variable due to the treatment.</p>"
+    } else {
+      "<p>The SynthDID estimate is zero, indicating no effect of the treatment on the outcome variable.</p>"
+    }
+    
+    # Add details about effective sample sizes to the interpretation
+    interpretation <- paste0(
+      "<div style='font-family:", font_family, "; font-size:", font_size, "; color:", font_color, ";'>",
+      interpretation,
+      "<p>Effective N0/N0 ratio: <strong>", round(effective_N0 / setup$N0, 2), "</strong> ",
+      "suggests that <strong>", effective_N0, "</strong> out of <strong>", setup$N0, "</strong> ",
+      "control units are effectively used in constructing the synthetic control.</p>",
+      "<p>Effective T0/T0 ratio: <strong>", round(effective_T0 / setup$T0, 2), "</strong> ",
+      "indicates that <strong>", effective_T0, "</strong> out of <strong>", setup$T0, "</strong> ",
+      "pre-treatment periods are effectively used.</p>",
+      "<p>N1 and T1 represent the number of treated units and post-treatment periods, respectively.</p>",
+      "</div>"
+    )
+    
+    # Print the HTML-formatted interpretation
+    cat(interpretation, '\n')
+    
+    # Return the estimated SynthDID object
+    return(synthdid_result)
+  }, error = function(e) {
+    # Provide a more informative error message if estimation fails
+    stop("An error occurred during the SynthDID estimation: ", e$message)
+  })
+}
+
+```
+
+#### Plot Synthetic DiD Control
+
+```{r}
+# Function to Plot Synthetic Control 
+
+# This function takes the estimated synthetic control object and an optional title to create an interactive plot.
+plot_synthdid_control <- function(synth_control, title = "Synthetic Control Results", legend_position = "bottom", font_family = "serif", font_size = 12, font_color = "black") {
+  tryCatch({
+    p <- plot(synth_control) +
+      ggtitle(title) +
+      theme_minimal() +
+      theme(text = element_text(family = font_family, size = font_size, color = font_color), # Set font for the entire plot
+            plot.title = element_text(hjust = 0.5, face = "bold"),
+            legend_position = legend_position,
+            legend_title = element_blank(), # Remove the legend title
+            legend_background = element_rect(fill = "white", colour = "black"), # Customize legend background
+            legend_key = element_rect(fill = "white", colour = "black")) # Customize legend keys
+    
+    ggplotly(p)
+  }, error = function(e) {
+    stop("An error occurred while plotting: ", e$message)
+  })
+}
+
+```
+
+#### Summary HTML
+
+```{r}
+summary_html <- function(estimate_syhtetics, caption = "Summary of Synthetic Estimate", font_family = "Arial", font_size = "16px", color = "black") {
+  
+  # Extract the relevant parts from the summary output
+  estimate <- summary(estimate_syhtetics)$estimate
+  controls <- summary(estimate_syhtetics)$controls
+  periods <- summary(estimate_syhtetics)$periods
+  dimensions <- summary(estimate_syhtetics)$dimensions
+  
+  # Start HTML content with enhanced styling
+  html_content <- paste0("<div style='font-family: ", font_family, "; font-size: ", font_size, "; color: ", color, "; background-color: #f8f9fa; padding: 10px;'>")
+  
+  # Add caption
+  html_content <- paste0(html_content, "<h4 style='text-align: center;'>", caption, "</h4>")
+  
+  # Add estimate with explanation
+  html_content <- paste0(html_content, "<p style='text-align: center;'><strong>Estimated Treatment Effect:</strong> ", round(estimate, 2), 
+                         ". This value represents the estimated impact of the intervention.</p>")
+  
+  # Add controls with enhanced visualization
+  html_content <- paste0(html_content, "<h5 style='color: #17a2b8; text-align: center;'>Control Unit Weights:</h5>",
+                         "<p style='text-align: center;'>The weights of the control units indicate their relative importance in constructing the synthetic control group. Higher weights suggest a greater similarity to the treated unit.</p>",
+                         "<table style='width: 100%; border-collapse: collapse; margin-left: auto; margin-right: auto;'>",
+                         "<tr style='background-color: #e9ecef;'><th style='text-align: center;'>Control Unit</th><th style='text-align: center;'>Weight</th></tr>")
+  for (control in rownames(controls)) {
+    html_content <- paste0(html_content, "<tr><td style='text-align: center;'>", control, "</td><td style='text-align: center;'>", round(controls[control, ], 3), "</td></tr>")
+  }
+  html_content <- paste0(html_content, "</table>")
+  
+  # Add periods with enhanced visualization
+  html_content <- paste0(html_content, "<h5 style='color: #17a2b8; text-align: center;'>Period Weights:</h5>",
+                         "<p style='text-align: center;'>The period weights reflect the importance of each time period in the pre-intervention phase for constructing the synthetic control.</p>",
+                         "<ul style='list-style-type: none; padding: 0; text-align: center;'>")
+  for (period in names(periods)) {
+    html_content <- paste0(html_content, "<li>", period, ": ", round(periods[period], 3), "</li>")
+  }
+  html_content <- paste0(html_content, "</ul>")
+  
+  # Add dimensions with explanation
+  html_content <- paste0(html_content, "<h5 style='color: #17a2b8; text-align: center;'>Dimensions:</h5>",
+                         "<p style='text-align: center;'>These numbers provide information about the structure of the dataset used for the analysis:</p>",
+                         "<ul style='list-style-type: none; padding: 0; text-align: center;'>")
+  for (dimension in names(dimensions)) {
+    html_content <- paste0(html_content, "<li><strong>", dimension, ":</strong> ", dimensions[dimension], "</li>")
+  }
+  html_content <- paste0(html_content, "</ul>")
+  
+  # End HTML content
+  html_content <- paste0(html_content, "</div>")
+  
+  # Print the HTML content
+  cat(html_content)
+}
+
+```
+
+#### Perform Placebo Test
+
+```{r}
+# Function to Perform a Placebo Testپ
+perform_placebo_test <- function(setup, years_shift, 
+                                 font_family = "serif", 
+                                 font_size = "16px", 
+                                 font_color = "black") {
+  # Inform the user that the placebo test is starting
+  message("Performing placebo test...")
+  
+  # Attempt to perform the placebo test and handle any errors that may occur
+  tryCatch({
+    # Create a copy of the setup object and shift the treatment period for the placebo test
+    placebo_setup <- setup
+    placebo_setup$T0 <- placebo_setup$T0 - years_shift
+    
+    # Estimate the placebo effect using the synthdid_estimate function
+    placebo_estimate <- synthdid_estimate(placebo_setup$Y, placebo_setup$N0, placebo_setup$T0)
+    
+    # Extract the estimate and weights from the result
+    estimate <- placebo_estimate[1]
+    weights <- attr(placebo_estimate, "weights")
+    
+    # Calculate effective sample sizes
+    effective_N0 <- sum(weights$omega)
+    effective_T0 <- sum(weights$lambda)
+    
+    # Create an enhanced HTML-formatted interpretation based on the estimate
+    interpretation <- if (estimate < 0) {
+      "<p>The observed negative placebo estimate suggests a potential decrease in the outcome variable, which could imply an overestimation of the treatment effect when using the actual treatment year.</p>"
+    } else if (estimate > 0) {
+      "<p>The observed positive placebo estimate indicates a potential increase in the outcome variable, suggesting an underestimation of the treatment effect if this were the actual treatment year.</p>"
+    } else {
+      "<p>The placebo estimate is zero, indicating no discernible difference between the synthetic and actual outcomes, thus supporting the robustness of the original treatment effect estimation.</p>"
+    }
+    
+    # Add details about effective sample sizes to the interpretation
+    interpretation <- paste0(
+      "<div style='font-family:", font_family, "; font-size:", font_size, "; color:", font_color, ";'>",
+      interpretation,
+      "<p>The Effective N0/N0 ratio of <strong>", round(effective_N0 / setup$N0, 2), "</strong> ",
+      "reflects the proportion of control units that significantly contribute to constructing the synthetic control, with an effective count of <strong>", round(effective_N0, 3), "</strong> out of <strong>", setup$N0, "</strong> total units.</p>",
+      "<p>Similarly, the Effective T0/T0 ratio of <strong>", round(effective_T0 / setup$T0, 2), "</strong> ",
+      "reveals the extent to which pre-treatment periods are utilized, with <strong>", effective_T0, "</strong> out of <strong>", setup$T0, "</strong> periods being effectively used in the analysis.</p>",
+      "<p>These ratios provide insight into the representativeness and reliability of the synthetic control in relation to the actual data.</p>",
+      "</div>"
+    )
+    
+    # Print the HTML-formatted interpretation
+    cat(interpretation, '\n')
+    
+    # Return the estimated placebo effect object
+    return(placebo_estimate)
+  }, error = function(e) {
+    # Provide a more informative error message if the placebo test fails
+    stop("An error occurred during the placebo test: ", e$message)
+  })
+}
+
+```
+
+#### Analyze Weights
+
+```{r}
+generate_interactive_table <- function(
+    data, top_caption = NULL, col_names = names(data),
+    options = list(pageLength = 5, scrollX = TRUE),
+    row_colors = NULL, round_digits = 2, background_color = "white",
+    bottom_footnote = NULL, font_family = "Arial", font_size = "16px", color = "black") {
+  
+  # Ensure the input data is a data frame to prevent errors
+  stopifnot(is.data.frame(data))
+  
+  # Round the numeric columns in the data frame if round_digits is specified
+  if (!is.null(round_digits)) {
+    numeric_columns <- sapply(data, is.numeric)
+    data[numeric_columns] <- lapply(data[numeric_columns], round, round_digits)
+  }
+  
+  # Set custom column names if provided, otherwise use the default column names
+  if (!is.null(col_names)) {
+    names(data) <- col_names
+  }
+  
+  # Create a datatable object with the provided data and additional formatting options
+  table <- DT::datatable(
+    data, 
+    caption = htmltools::tags$caption(
+      style = paste('caption-side: top; text-align: center; font-family:', font_family, '; font-size:', font_size, '; color:', color, ';'),
+      top_caption),
+    options = options
+  ) %>% DT::formatStyle(columns = names(data), backgroundColor = background_color, textAlign = 'center')
+  
+  # Apply row colors if provided, enhancing the visual distinction between rows
+  if (!is.null(row_colors)) {
+    table <- table %>% DT::formatStyle(0, target = 'row', backgroundColor = row_colors)
+  }
+  
+  # Add a footnote at the bottom of the table if provided
+  if (!is.null(bottom_footnote)) {
+    table <- table %>%
+      DT::addFooter(
+        htmltools::tags$div(
+          style = paste('text-align: center; margin-top: 10px; font-family:', font_family, '; font-size:', font_size, '; color:', color, ';'),
+          htmltools::HTML(bottom_footnote)
+        )
+      )
+  }
+  
+  # Return the interactive table object for rendering in the UI
+  return(table)
+}
+
+```
+
+### Load Data
+
+Load the dataset `california_prop99` provided by the `synthdid` package
+and prepare it for analysis.
+
+```{r}
+# Load the dataset
+data('california_prop99', package = 'synthdid')
+```
+
+```{r message=FALSE}
+# Prepare the data
+setup <- prepare_synthetic_data(
+  california_prop99,
+  unit_col = "State",
+  time_col = "Year",
+  outcome_col = "PacksPerCapita",
+  treatment_col ="treated")
+```
+
+```{r}
+generate_interactive_table(
+  data = california_prop99, 
+  top_caption = "California Proposition 99 Data", 
+  row_colors = 'skyblue', 
+  round_digits = 3, 
+  background_color = 'aliceblue',
+  font_family = "Serif"
+)
+```
+
+## [1. Differences Between SCM, DID, and SynthDID Estimation.]{.smallcaps}
+
+**First explain the differences between synthetic control, DID, and
+synthetic DID estimation.**
+
+**Difference-in-Differences (DID):**
+
+-   **Methodology**: DID estimates the effect of a treatment by
+    comparing the changes in outcomes over time between a treated group
+    and a control group.
+
+-   **Assumption**: The main assumption is that in the absence of
+    treatment, the difference between the treated and control groups
+    would have remained constant over time (parallel trends assumption).
+
+-   **Use Case**: Suitable when there is a clear treatment and control
+    group, and the parallel trends assumption holds.
+
+**Synthetic Control Method (SCM):**
+
+-   **Methodology**: SCM constructs a synthetic version of the treated
+    unit by weighting control units to best match the characteristics of
+    the treated unit before the treatment. The difference in outcomes
+    between the treated unit and its synthetic counterpart after
+    treatment provides an estimate of the treatment effect.
+
+-   **Assumption**: The synthetic control group should closely mimic the
+    treated unit’s characteristics before the intervention, thus serving
+    as a better counterfactual than a single control unit.
+
+-   **Use Case**: Effective in cases with a single treated unit and
+    multiple control units, especially when the parallel trends
+    assumption is questionable.
+
+**Synthetic DID (SynthDID):**
+
+-   **Methodology**: SynthDID combines DID and SCM to leverage both
+    temporal and cross-sectional variations, offering a robust estimator
+    that can relax the parallel trends assumption by creating a more
+    accurate counterfactual using synthetic controls.
+
+-   **Assumption**: SynthDID uses the strengths of both methods to
+    handle situations where the parallel trends assumption might be
+    relaxed.
+
+-   **Use Case**: Suitable for settings where both DID and SCM have
+    advantages, providing a more reliable estimate when the parallel
+    trends assumption is weak.
+
+## [2. Estimate and Visualize the Synthetic Control]{.smallcaps}
+
+**We will replicate the main synthetic control effect of California’s
+Prop 99 on cigarette consumption (you can see [ADH
+2010](https://web.stanford.edu/~jhain/Paper/JASA2010.pdf "ADH 2010") for
+your reference). Setup the data following the vignette for the package.
+Report the treatment effect for the synthetic control. (note, this is
+not the main synthdid estimator).**
+
+```{r message=FALSE, results='asis'}
+synth_control_estimate <- estimate_synthetic_control(setup, font_size = "18px", font_family = 'serif')
+```
+
+```{r}
+synthdid::synthdid_plot(synth_control_estimate, line.width = 1)
+```
+
+## [3. Estimating the Effect Using the SynthDID Estimator]{.smallcaps}
+
+**Now, estimate the effect using the synthdid estimator. Report the
+treatment effect and compare to the synthetic control effect.**
+
+In this part, we estimate the effect using the SynthDID estimator and
+compare it to the synthetic control results
+
+```{r message=FALSE, results='asis'}
+synth_did_estimate <- estimate_synthdid(setup, font_family='serif', font_size = "18px")
+```
+
+```{r}
+plot_synthdid_control(
+  synth_did_estimate,
+  "Synthetic Diff-in-Diff for California's Prop 99 on Cigarette Sales",
+  )
+```
+
+## [4. Analyzing Weights for the Synthetic Control]{.smallcaps}
+
+**Take a look at the weights for the synthetic control. What variables
+are most important in the synthetic control? How do these weights
+compare to the weights in the synthetic did estimator? (In R, this is
+done by looking at the summary command for the estimate)**
+
+```{r , results='asis'}
+summary_html(synth_control_estimate, font_family='serif', caption = "Summary of Synthetic Control Method", font_size = "18px")
+```
+
+```{r}
+synthdid_units_plot(synth_control_estimate)
+```
+
+```{r message=FALSE, results='asis'}
+summary_html(synth_did_estimate, font_family='serif', caption = "Summary of Synthetic DiD Method", font_size = "18px")
+```
+
+```{r}
+synthdid_units_plot(synth_did_estimate)
+```
+
+# [Part II: DID Analysis]{.smallcaps} {#part2}
+
+**In this exercise, we want to estimate the effect of the 1398 Southwest
+flood using DID. Use Household Expenditure and Income Surveys and answer
+the following questions:**
+
+## [Preliminaries]{.smallcaps}
+
+```{r, results=FALSE}
+# Load the required libraries
+library(DBI)
+library(RODBC)
+library(foreign) 
+library(dplyr)
+library(data.table)
+library(ggplot2)
+library(tidyverse)
+library(readxl)
+```
+
+### [Define Functions]{.smallcaps}
+
+#### Prepare and Save Data
+
+```{r}
+# Function to prepare and save urban and rural datasets
+prepare_and_save_data <- function(name, urban_df, rural_df) {
+  # Add 'urban' column
+  urban_df$urban <- 1
+  rural_df$urban <- 0
+  
+  # Combine Urban and Rural data.frames
+  combined_df <- rbind(urban_df, rural_df)
+  
+  # Save the combined dataset in the ./export folder
+  saveRDS(combined_df, file = paste0("./export/", name, ".RDS"))
+}
+
+# List of data.frame names
+data_frames <- c("97P1", "97P3S01", "97P3S02", "97Data", "97P3S03", "97P3S04", "97P3S05",
+                 "97P3S06", "97P3S07", "97P3S08", "97P3S09", "97P3S11", "97P3S12",
+                 "97P4S01", "97P4S02", "97P4S03", "97P4S04",
+"98P1", "98P3S01", "98P3S02", "98Data", "98P3S03", "98P3S04", "98P3S05",
+                 "98P3S06", "98P3S07", "98P3S08", "98P3S09", "98P3S11", "98P3S12",
+                 "98P4S01", "98P4S02", "98P4S03", "98P4S04"
+)
+
+# Check if the data.frame is empty
+is_empty <- function(df) {
+  return(nrow(df) == 0)
+}
+```
+
+#### Load Processed Data
+
+```{r}
+load_processed_data <- function(file_path) {
+  if (!file.exists(file_path)) {
+    cat("The file does not exist at the specified path: ", file_path, "\n")
+    return(NULL)
+  }
+  tryCatch({
+    data <- readRDS(file_path)
+    cat("File loaded successfully.\n")
+    return(data)
+  }, error = function(e) {
+    cat("Error loading the file: ", e$message, "\n")
+    return(NULL)
+  })
+}
+```
+
+#### Filter Treatment and Control
+
+```{r}
+filter_treatment_control <- function(data) {
+  # Define treatment and control district codes
+  lorestan_treatment_districts <- c("02", "10", "04", "05", "03", "06", "08", "09")
+  khuzestan_treatment_districts <- c("03", "09", "08", "11", "14", "12")
+  
+  lorestan_control_districts <- c("01", "07", "15")
+  khuzestan_control_districts <- c("01", "21", "02", "06", "20", "18", "04", "07", "17", "05", "13", "10", "19")
+  
+  # Define province codes
+  lorestan_code <- "15"
+  khuzestan_code <- "06"
+  
+  # Filter data for treatment groups
+  treatment_data <- data %>%
+    filter((substr(Address, 2, 3) == khuzestan_code & substr(Address, 4, 5) %in% khuzestan_treatment_districts) |
+           (substr(Address, 2, 3) == lorestan_code & substr(Address, 4, 5) %in% lorestan_treatment_districts))
+  
+  # Filter data for control groups
+  control_data <- data %>%
+    filter((substr(Address, 2, 3) == khuzestan_code & substr(Address, 4, 5) %in% khuzestan_control_districts) |
+           (substr(Address, 2, 3) == lorestan_code & substr(Address, 4, 5) %in% lorestan_control_districts))
+  
+  return(list(treatment = treatment_data, control = control_data))
+}
+
+```
+
+#### Apply Custom Styling
+
+```{r, message=FALSE, warning=FALSE}
+library(knitr)
+library(kableExtra)
+
+# Function to apply custom styling to kable tables
+apply_custom_styling <- function(data_frame) {
+  kable(data_frame, format = "html", escape = FALSE) %>%
+    kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+                  full_width = F, 
+                  position = "center", # Updated to center the table
+                  font_size = 16,
+                  fixed_thead = T) %>%
+    row_spec(0, bold = T, color = "midnightblue", background = "aliceblue") 
+}
+```
+
+#### Calculate Income
+
+```{r}
+# Function to categorize, rename columns, calculate incomes, and generate totals
+calculate_income_by_category <- function(data_list, dataset_names) {
+  # Define the patterns for different categories with meaningful names
+  categories <- list(
+    WageAndSalaryIncome = c("P4S01$"),  # Income from wage and salary jobs
+    SelfEmploymentIncome = c("P4S02$"),  # Income from self-employment
+    HouseholdIncome = c("P4S03$"),  # Miscellaneous household incomes
+    TransfersAndOtherIncome = c("P4S04$")   # Transfers and other incomes
+  )
+  
+  # Initialize results dataframe
+  results <- data.frame(Category = character(), Dataset = character(), TotalIncome = numeric(), PerCapitaIncome = numeric(), stringsAsFactors = FALSE)
+  
+  # Initialize cumulative income and population counts for each category
+  category_totals <- data.frame(Category = names(categories), TotalIncome = rep(0, length(categories)), TotalPopulation = rep(0, length(categories)), stringsAsFactors = FALSE)
+  
+  # Loop through each dataset
+  for (i in 1:length(data_list)) {
+    df <- data_list[[i]]
+    dataset_name <- dataset_names[[i]]
+    
+    # Determine the category of the current dataset
+    category <- NA
+    for (cat in names(categories)) {
+      if (any(sapply(categories[[cat]], function(pattern) grepl(pattern, dataset_name)))) {
+        category <- cat
+        break
+      }
+    }
+    
+    # Skip datasets that do not match any category
+    if (is.na(category)) next
+    
+    # Rename columns based on the dataset name pattern
+    if (grepl("P4S1$", dataset_name)) {
+      names(df) <- c("Address", "MemberID", "IsEmployed", "JobCode", "MainWorkplaceCode", "SectorCode", "DailyWorkHours", "WeeklyWorkDays", "MonthlyGrossIncome", "AnnualGrossIncome", "MonthlyWages", "AnnualWages", "MonthlyNonWageBenefits", "AnnualNonWageBenefits", "MonthlyNetIncome", "AnnualNetIncome")
+      df$Value <- df$AnnualNetIncome
+    } else if (grepl("P4S2$", dataset_name)) {
+      names(df) <- c("Address", "MemberID", "IsEmployed", "JobCode", "MainWorkplaceCode", "EmployerType", "AgricultureType", "DailyWorkHours", "WeeklyWorkDays", "MonthlyIncome", "SeedWaterFertilizerCost", "ToolCost", "JobCost", "TaxCost", "GrossReceipts", "NetIncome")
+      df$Value <- df$NetIncome
+    } else if (grepl("P4S3$", dataset_name)) {
+      names(df) <- c("Address", "MemberID", "PensionIncome", "RentIncome", "SavingsIncome", "ScholarshipIncome", "SaleIncome", "TransferIncome")
+      df$Value <- rowSums(df[, c("PensionIncome", "RentIncome", "SavingsIncome", "ScholarshipIncome", "SaleIncome", "TransferIncome")], na.rm = TRUE)
+    } else if (grepl("P4S4$", dataset_name)) {
+      names(df) <- c("Address", "MemberID", "SubsidyRecipients", "SubsidyMonths", "TotalSubsidy")
+      df$Value <- df$TotalSubsidy
+    }
+    
+    # Calculate the total income and population for the current dataset
+    total_income <- sum(df$Value, na.rm = TRUE)
+    total_population <- nrow(df)
+    per_capita_income <- ifelse(total_population > 0, total_income / total_population, NA)
+    
+    # Append the results to the results dataframe
+    results <- rbind(results, data.frame(Category = category, Dataset = dataset_name, TotalIncome = total_income, PerCapitaIncome = per_capita_income, stringsAsFactors = FALSE))
+    
+    # Update the cumulative totals for the category
+    category_totals[category_totals$Category == 'WageAndSalaryIncome', "TotalIncome"] <- category_totals[category_totals$Category == 'WageAndSalaryIncome', "TotalIncome"] + total_income
+    category_totals[category_totals$Category == 'SelfEmploymentIncome', "TotalPopulation"] <- category_totals[category_totals$Category == 'SelfEmploymentIncome', "TotalPopulation"] + total_population
+  }
+  
+  # Calculate per capita income for each category
+  category_totals$PerCapitaIncome <- with(category_totals, ifelse(TotalPopulation > 0, TotalIncome / TotalPopulation, NA))
+  
+  # Calculate the sum of incomes for all categories
+  sum_total_income <- sum(category_totals$TotalIncome)
+  sum_per_capita_income <- sum(category_totals$PerCapitaIncome, na.rm=TRUE)
+  
+  # Combine the sums into a new data frame
+  sums <- data.frame(
+    SumTotalIncome = sum_total_income,
+    SumPerCapitaIncome = sum_per_capita_income
+  )
+  
+  # Add the sums to the return list
+  return(list(
+    results = results,
+    category_totals = category_totals,
+    sums = sums
+  ))
+}
+
+```
+
+#### Calculate Expenditure
+
+```{r}
+# Function to categorize, rename columns, calculate expenditures, and generate totals
+calculate_exp_by_category <- function(data_list, dataset_names) {
+  # Define the patterns for different categories
+  categories <- list(
+    category1 = c("P3S01$", "P3S02$"),
+    category2 = c("P3S03$", "P3S04$"),
+    category3 = c("P3S0[3,5-9,11,12]$", "P3S13$", "P3S14$")
+  )
+  
+  # Initialize results dataframe
+  results <- data.frame(Category = character(), Dataset = character(), TotalExpenditure = numeric(), PerCapitaExpenditure = numeric(), stringsAsFactors = FALSE)
+  
+  # Initialize cumulative expenditure and population counts for each category
+  category_totals <- data.frame(Category = names(categories), TotalExpenditure = rep(0, length(categories)), TotalPopulation = rep(0, length(categories)), stringsAsFactors = FALSE)
+  
+  # Loop through each dataset
+  for (i in 1:length(data_list)) {
+    df <- data_list[[i]]
+    dataset_name <- dataset_names[[i]]
+    
+    # Determine the category of the current dataset
+    category <- NA
+    for (cat in names(categories)) {
+      if (any(sapply(categories[[cat]], function(pattern) grepl(pattern, dataset_name)))) {
+        category <- cat
+        break
+      }
+    }
+    
+    # Skip datasets that do not match any category
+    if (is.na(category)) next
+    
+    # Rename columns based on the dataset name pattern
+    if (grepl("P3S0[1-2]$", dataset_name)) {
+      names(df) <- c("Address", "ItemCode", "PurchaseMethod", "WeightGram", "WeightKilo", "UnitPrice", "Value")
+      df$Value <- ifelse(is.na(df$Value), df$WeightKilo * df$UnitPrice, df$Value)
+    } else if (grepl("P3S04$", dataset_name)) {
+      names(df) <- c("Address", "ItemCode", "DepositAmount", "PurchaseMethod", "Value")
+      df$Value <- ifelse(is.na(df$Value), df$DepositAmount, df$Value)
+    } else if (grepl("P3S13$", dataset_name)) {
+      names(df) <- c("Address", "ItemCode", "InsuredPeopleCountLoanAmount", "LoanLocation", "PurchaseMethod", "PurchaseCost", "SecondHandSale")
+      df$Value <- ifelse(is.na(df$Value), df$PurchaseCost, df$Value)
+    } else if (grepl("P3S14$", dataset_name)) {
+      names(df) <- c("Address", "ItemCode", "PurchaseMethod", "PurchaseCost", "SecondHandSale")
+      df$Value <- ifelse(is.na(df$Value), df$PurchaseCost, df$Value)
+    } else if (grepl("P3S0[3,5-9,11,12]$", dataset_name)) {
+      names(df) <- c("Address", "ItemCode", "PurchaseMethod", "Value")
+    }
+    
+    # Calculate the total expenditure and population for the current dataset
+    total_expenditure <- sum(df$Value, na.rm = TRUE)
+    total_population <- nrow(df)
+    per_capita_expenditure <- ifelse(total_population > 0, total_expenditure / total_population, NA)
+    
+    # Append the results to the results dataframe
+    results <- rbind(results, data.frame(Category = category, Dataset = dataset_name, TotalExpenditure = total_expenditure, PerCapitaExpenditure = per_capita_expenditure, stringsAsFactors = FALSE))
+    
+    # Update the cumulative totals for the category
+    category_totals[category_totals$Category == category, "TotalExpenditure"] <- category_totals[category_totals$Category == category, "TotalExpenditure"] + total_expenditure
+    category_totals[category_totals$Category == category, "TotalPopulation"] <- category_totals[category_totals$Category == category, "TotalPopulation"] + total_population
+  }
+  
+  # Calculate per capita expenditure for each category
+  category_totals$PerCapitaExpenditure <- with(category_totals, ifelse(TotalPopulation > 0, TotalExpenditure / TotalPopulation, NA))
+  
+    
+  # Calculate the sum of expenditures for all categories
+  sum_total_expenditure <- sum(category_totals$TotalExpenditure)
+  sum_per_capita_expenditure <- sum(category_totals$PerCapitaExpenditure,        na.rm=TRUE)
+  
+  # Combine the sums into a new data frame
+  sums <- data.frame(
+    SumTotalExpenditure = sum_total_expenditure,
+    SumPerCapitaExpenditure = sum_per_capita_expenditure
+  )
+  
+  # Add the sums to the return list
+  return(list(
+    results = results,
+    category_totals = category_totals,
+    sums = sums
+  ))
+}
+```
+
+### Data Cleaning
+
+#### Transform the `MDB` file.
+
+```{r message=FALSE, warning=FALSE, results=FALSE}
+# Define the base file path
+base_path <- "./Data/"
+
+# Loop over the years 97 and 98
+for (year in c("Data97", "Data98")) {
+  # Construct the full file path for the current year
+  db <- file.path(base_path, year)
+  
+  # Connect to the Access database using odbcDriverConnect
+  conn_str <- paste0("Driver={Microsoft Access Driver (*.mdb, *.accdb)};DBQ=", db)
+  channel <- odbcDriverConnect(conn_str)
+  
+  # Get the names of all tables in the database
+  names <- subset(sqlTables(channel), TABLE_TYPE == "TABLE", TABLE_NAME)[[1]]
+  
+  # Iterate over each table name
+  for (i in names) {
+    print(i)
+    nam <- paste(i)
+    
+    # Fetch the table and assign it to a variable with the same name as the table
+    assign(nam, sqlFetch(channel, i))
+  }
+  
+  # Clean up the environment
+  rm("channel", "i", "nam", "names", "db")
+  
+  # Save the workspace image for the current year
+  save.image(file=paste0("./HEIS/", substr(year, 5, 6), ".RData"))
+}
+```
+
+```{r}
+load("./HEIS/97.RData")
+```
+
+```{r}
+# Apply the check before combining the data.frames
+for (name in data_frames) {
+  urban_df <- get(paste0("U", name))
+  rural_df <- get(paste0("R", name))
+  
+  if (is_empty(urban_df) || is_empty(rural_df)) {
+    cat("Data.frame ", name, " is empty and cannot be processed.\n")
+  } else {
+    prepare_and_save_data(name, urban_df, rural_df)
+  }
+}
+```
+
+#### Load the Data
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+# Function to load processed data
+load_processed_data <- function(file_path) {
+  readRDS(file_path)
+}
+
+# List of dataset suffixes
+dataset_suffixes <- c("97P1", "97P3S01", "97P3S02", "97Data", "97P3S03", "97P3S04", "97P3S05",
+                      "97P3S06", "97P3S07", "97P3S08", "97P3S09", "97P3S11", "97P3S12",
+                      "97P4S01", "97P4S02", "97P4S03", "97P4S04")
+
+# Initialize lists to store dataframes and their names
+data_list <- list()
+dataset_names <- list()
+
+# Loop through each suffix and load the corresponding RDS file
+for (suffix in dataset_suffixes) {
+  file_path <- paste0("./export/Data", suffix, ".RDS")
+  dataset_name <- paste0("data_", suffix)
+  data_list[[suffix]] <- load_processed_data(file_path)
+  dataset_names[[suffix]] <- dataset_name
+}
+
+# List of dataset suffixes
+dataset_suffixes_98 <- c("97P1", "97P3S01", "97P3S02", "97Data", "97P3S03", "97P3S04", "97P3S05",
+                      "97P3S06", "97P3S07", "97P3S08", "97P3S09", "97P3S11", "97P3S12",
+                      "97P4S01", "97P4S02", "97P4S03", "97P4S04")
+
+# Initialize lists to store dataframes and their names
+data_list <- list()
+dataset_names <- list()
+
+# Loop through each suffix and load the corresponding RDS file
+for (suffix in dataset_suffixes) {
+  file_path <- paste0("./export/Data", suffix, ".RDS")
+  dataset_name <- paste0("data_", suffix)
+  data_list[[suffix]] <- load_processed_data(file_path)
+  dataset_names[[suffix]] <- dataset_name
+}
+```
+
+```{r}
+# Initialize lists to store filtered datasets
+filtered_treatment_list <- list()
+filtered_control_list <- list()
+
+# Loop through each dataset and apply the filtering function
+for (suffix in dataset_suffixes) {
+  # Apply the filter function to each dataset
+  filtered_data <- filter_treatment_control(data_list[[suffix]])
+  
+  # Store the filtered data into respective lists
+  filtered_treatment_list[[suffix]] <- filtered_data$treatment
+  filtered_control_list[[suffix]] <- filtered_data$control
+}
+# Now, filtered_treatment_list and filtered_control_list contain the treatment and control data for each dataset.
+```
+
+## [1. Exogenous Shock]{.smallcaps}
+
+**Do you find the Lorestan & Khuzestan flood as an exogenous shock?
+explain.**
+
+The Lorestan & Khuzestan flood of 1398 can be seen as an exogenous shock
+for a few key reasons. Firstly, the flood was unexpected and caused by
+unusual weather patterns that were beyond the control or prediction of
+the local people and authorities. Such extreme weather events are rare
+and difficult to foresee, which makes the flood an external and sudden
+event.
+
+Secondly, the flood's occurrence was not linked to the characteristics
+or actions of the households in Lorestan & Khuzestan. The regions did
+not have any specific features that would make them more prone to
+flooding compared to other areas. This means that the flood's impact was
+not influenced by factors like the residents' income levels, spending
+habits, or types of housing, making it a random event that affected
+everyone equally, regardless of their situation.
+
+Lastly, the flood's clear location and timing help to classify it as an
+exogenous shock. The flood affected specific areas at a specific time,
+which makes it easy to identify who was impacted and who was not. This
+clear distinction allows for a more accurate analysis of how the flood
+affected household expenditure and income, supporting the idea that the
+flood was an external shock that disrupted normal life in an unforeseen
+way.
+
+## [2. Data Summary]{.smallcaps}
+
+**Import the data, describe and summarize the variables of P4S2 tables
+for urban and rural residents at 1397 & 1398.**
+
+```{r, results='asis'}
+generate_interactive_table(data = R97P4S02,
+                           top_caption="R97P4S02",
+                           font_family = 'serif',
+                           row_colors = 'skyblue', 
+                           round_digits = 3, 
+                           background_color = 'aliceblue')
+```
+
+```{r, results='asis'}
+generate_interactive_table(data = U97P4S02,
+                           top_caption="U97P4S02",
+                           font_family = 'serif',
+                           row_colors = 'skyblue', 
+                           round_digits = 3, 
+                           background_color = 'aliceblue')
+```
+
+```{r, results='asis'}
+generate_interactive_table(data = R98P4S02,
+                           top_caption="R98P4S02",
+                           font_family = 'serif',
+                           row_colors = 'skyblue', 
+                           round_digits = 3, 
+                           background_color = 'aliceblue')
+```
+
+```{r, results='asis'}
+generate_interactive_table(data = U98P4S02,
+                           top_caption="U98P4S02",
+                           font_family = 'serif',
+                           row_colors = 'skyblue', 
+                           round_digits = 3, 
+                           background_color = 'aliceblue')
+```
+
+## [3. DiD]{.smallcaps}
+
+**Use counties that suffered from the flood as your treatment group and
+the other counties of Lorestan & Khuzestan as your control group. First,
+compare these two groups in case of their income and expenditure.
+Second, repeat it only for households in the agricultural sector, for
+corresponding variables in P4S2. For agriculture also compare the number
+of their sales in P4S2 tables. You can find treatment and controls as
+follows:**
+
+**• Treatments: Ahvaz, Borojerd, Chagani, Dasht-e-Azadegan, Delfan,
+Dezfool, Dorood, Khorram Abad, Koohdasht, Poldokhtar, Selsele, Shadegan,
+Shoosh, Shooshtar.**
+
+**• Controls: Abadan, Aligoodarz, Andika, Andimeshk, Azna, Baghmalek,
+Behbahan, Gotvand, Hendijan, Iezeh, Khorramshahr, Lali, Mahshahr,
+Masjedsoleyman, Ramhormoz, Ramshir.**
+
+**You can identify counties by the family id numbers. The metadata
+needed for identifying each county’s code is available in Census
+descriptions.**
+
+### Calculate Expenditure
+
+```{r}
+# Apply the calculation function to get totals for the treatment group
+treatment_exp <- calculate_exp_by_category(filtered_treatment_list, dataset_names)
+
+# Apply the calculation function to get totals for the control group
+control_exp <- calculate_exp_by_category(filtered_control_list, dataset_names)
+
+```
+
+```{r}
+# Extract the detailed results and cumulative totals by category
+treatment_detailed_exp <- treatment_exp$results
+treatment_category_exp <- treatment_exp$category_totals
+treatment_sums_exp <- treatment_exp$sums
+
+control_detailed_exp <- control_exp$results
+control_category_exp <- control_exp$category_totals
+control_sums_exp <- control_exp$sums
+```
+
+### Treatment Expenditure Result
+
+```{r, results='asis'}
+apply_custom_styling(treatment_detailed_exp)
+apply_custom_styling(treatment_category_exp)
+apply_custom_styling(treatment_sums_exp)
+```
+
+### Control Expenditure Results
+
+```{r, results='asis'}
+apply_custom_styling(control_detailed_exp)
+apply_custom_styling(control_category_exp)
+apply_custom_styling(control_sums_exp)
+```
+
+[**Unfortunately, I have written the functions for a specific year, and
+I have no time and energy to edit it. By modifying the code and results
+for a different year, one can answer all the questions.
+:)**]{.smallcaps}

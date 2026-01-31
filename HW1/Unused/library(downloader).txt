@@ -1,0 +1,24 @@
+library(downloader)
+
+# Read URLs from the file
+urls <- readLines("urls.txt")
+
+# Function to download data from a URL
+download_data <- function(url) {
+  # Extract filename from the URL
+  filename <- basename(url)
+  # Destination file path to save the downloaded data
+  destination <- paste0("data_", filename)
+  # Download the data
+  tryCatch({
+    download(url, destfile = destination, mode = "wb")
+    print(paste("Data from", url, "downloaded successfully."))
+  }, error = function(e) {
+    print(paste("Error downloading data from", url))
+  })
+}
+
+# Iterate through each URL and download data
+for (url in urls) {
+  download_data(url)
+}

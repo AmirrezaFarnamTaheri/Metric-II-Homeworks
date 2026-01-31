@@ -1,0 +1,694 @@
+---
+title: "Metrics II - Homework 4"
+author: "Farnam Taheri"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(haven)
+library(tidyverse)
+library(dplyr)
+library(broom)
+library(knitr)
+# Load the AER package
+library(AER)
+library(zoo)
+library(dagitty)
+```
+
+# [Part I (Sample Balance)]{.smallcaps}
+
+This problem asks you to replicate a part of **Krueger’s (1999)** balance check exercise which you have already seen in the slides in the class. This paper uses the STAR dataset which you can find using AER package in R (You can simply use this command: `data("STAR", package = "AER")).`
+
+## [1. Replicate Table 1 of this paper and interpret the results. Are all the samples balanced?]{.smallcaps}
+
+```{r}
+# Load the STAR dataset
+data("STAR", package = "AER")
+```
+
+### Data Manipulation
+
+#### Calculate Attritions
+
+```{r}
+STAR$attrition <-
+ifelse(!is.na(STAR$stark) & (is.na(STAR$star1)), 1,
+ifelse(!is.na(STAR$star1) & (is.na(STAR$star2)), 2,
+ifelse(!is.na(STAR$star2) & (is.na(STAR$star3)), 3, 0)))
+```
+
+```{r}
+STAR$total <-
+ifelse(!is.na(STAR$stark), 1,
+ifelse(!is.na(STAR$star1), 2,
+ifelse(!is.na(STAR$star2), 3,
+ifelse(!is.na(STAR$star3), 4,
+0))))
+```
+
+```{r}
+# Calculate attrition for year k
+attrition_year_k <- sum(STAR$attrition == 1, na.rm = TRUE) / sum(!is.na(STAR$stark)) * 100
+
+# Calculate attrition for year1
+attrition_year_1 <- sum(STAR$attrition == 2, na.rm = TRUE) / sum(!is.na(STAR$star1)) * 100
+
+# Calculate attrition for year2
+attrition_year_2 <- sum(STAR$attrition == 3, na.rm = TRUE) / sum(!is.na(STAR$star2)) * 100
+```
+
+```{r}
+attrition_year_k
+```
+
+```{r}
+table(STAR$attrition)
+table(STAR$total)
+```
+
+#### Convert 'yearqtr' column to numeric
+
+```{r}
+# Convert 'birth' column into 'yearqtr' object
+STAR$birth <- as.yearqtr(STAR$birth)
+
+# Convert 'yearqtr' to numeric, each quarter is 0.25
+STAR$birth <- as.numeric(STAR$birth) + (cycle(STAR$birth) - 1) / 4
+
+# Calculate 'age' column as of 1985
+STAR$age <- 1985 - STAR$birth
+```
+
+#### Convert 'lunch#no' columns to numeric
+
+In this code, `columns_to_convert` is a vector that contains the names of the columns you want to convert. The for loop iterates over this vector, and for each column, it uses the `ifelse` function to create a new binary numerical variable.
+
+```{r}
+# List of column names to convert
+columns_to_convert <- c("lunchk", "lunch1", "lunch2", "lunch3")
+
+# Use a for loop to convert each column
+for (column in columns_to_convert) {
+  STAR[[column]] <- ifelse(STAR[[column]] == "free", 1, 0)
+}
+```
+
+```{r}
+# Convert 'gender' to a binary numeric variable (0 for male, 1 for female)
+STAR$gender_numeric <- as.numeric(STAR$gender == "female")
+
+# Convert 'ethnicity' to numeric codes
+STAR$ethnicity_numeric <- as.numeric(STAR$ethnicity)
+```
+
+### Define Functions
+
+#### **calculate_percentage Function**
+
+Calculates the percentage of a specified condition across different levels of education (Kindergarten, Grade 1, Grade 2, Grade 3) and star categories.
+
+**Arguments:**
+
+-   `data`: Input dataset
+
+-   `var_name`: Variable column name (e.g., "lunch")
+
+**How it works:**
+
+1.  Defines the mapping of star columns to levels of education
+
+2.  Loops through each grade level
+
+3.  Calculates percentage for each star category
+
+4.  Stores the results in a data frame with the corresponding level of education
+
+5.  Reshapes the data frame to have levels of education as rows and star categories as columns
+
+6.  Returns a markdown table using knitr's kable function
+
+```{r}
+  calculate_percentage_by_level <- function(data, var_name) {
+  # Define the grades to iterate over
+  grades <- c("k", 1:3)
+
+  # Define the mapping of star columns to levels of education
+  level_mapping <- setNames(c("Kindergarten", "Grade 1", "Grade 2", "Grade 3"), c("stark", "star1", "star2", "star3"))
+
+  # Initialize an empty data frame to store the results
+  percentages_df <- data.frame()
+
+  # Loop through each grade level
+  for (i in grades) {
+    # Construct the variable column name based on the grade
+    var_column <- paste0(var_name, i)
+    # Construct the star column name based on the grade
+    star_column <- paste0("star", i)
+
+    # Check if the variable column exists in the dataset
+    if (!(var_column %in% names(data))) {
+      # Skip to the next iteration if the column does not exist
+      next
+    }
+
+    # Extract the data for the current variable and star columns
+    var_data <- data[[var_column]]
+    star_data <- data[[star_column]]
+
+    # Identify the unique categories within the star column
+    categories <- unique(na.omit(star_data))
+
+    # Calculate the percentage for each star category
+    for (category in categories) {
+      # Subset the variable data based on the star category
+      category_data <- var_data[star_data == category]
+      # Count the number of entries that meet the condition (e.g., free lunch)
+      condition_count <- sum(category_data == 1, na.rm = TRUE)
+      # Count the total number of non-missing entries
+      total_count <- length(na.omit(category_data))
+      # Calculate the percentage
+      percentage <- (condition_count / total_count) * 100
+
+      # Add the results to the data frame with the corresponding level of education
+      percentages_df <- rbind(percentages_df, data.frame(Level = level_mapping[[star_column]], Category = category, Percentage = percentage))
+    }
+  }
+
+  # Reshape the data frame to have levels of education as rows and categories as columns
+  reshaped_df <- percentages_df %>%
+    spread(key = Category, value = Percentage) %>%
+    mutate(Level = factor(Level, levels = c("Kindergarten", "Grade 1", "Grade 2", "Grade 3"))) %>%
+    arrange(Level)
+
+  # Use knitr's kable function to create a markdown table from the reshaped data frame
+  kable(reshaped_df, format = "markdown", digits=3, align="lccccccc")
+}
+```
+
+#### **race_proportions Function**
+
+Calculates the proportion of white/asian for each level of education (Kindergarten, Grade 1, Grade 2, Grade 3).
+
+**Arguments:**
+
+-   `data`: Input dataset
+
+**How it works:**
+
+1.  Defines the mapping of star columns to levels of education
+
+2.  Iterates over the star columns (stark, star1, star2, star3)
+
+3.  Calculates the proportion of white/asian for each column
+
+4.  Stores the results in a data frame with the corresponding level of education
+
+5.  Reshapes the data frame to have levels of education as rows
+
+6.  Returns a markdown table using knitr's kable function
+
+```{r}
+# Function to calculate the proportion of white/asian for each 'star' column
+race_proportions_by_level <- function(data) {
+  # Define the mapping of star columns to levels of education
+  level_mapping <- setNames(c("Kindergarten", "Grade 1", "Grade 2", "Grade 3"), c("stark", "star1", "star2", "star3"))
+
+  # Initialize an empty data frame to store the results
+  proportions_df <- data.frame()
+
+  # Iterate over the star columns
+  for (star_column in names(level_mapping)) {
+    # Get the column data
+    column_data <- data[[star_column]]
+
+    # Calculate the proportion for the current column
+    white_asian_count <- sum(column_data == "regular" | column_data == "small", na.rm = TRUE)
+    total_count <- length(na.omit(column_data))
+    proportion_white_asian <- white_asian_count / total_count
+
+    # Add the proportion to the data frame with the corresponding level of education
+    proportions_df <- rbind(proportions_df, data.frame(Level = level_mapping[[star_column]], Proportion_White_Asian = proportion_white_asian))
+  }
+
+  # Reshape the data frame to have levels of education as rows
+  reshaped_df <- proportions_df %>%
+    mutate(Level = factor(Level, levels = c("Kindergarten", "Grade 1", "Grade 2", "Grade 3"))) %>%
+    arrange(Level)
+
+  # Use knitr's kable function to create a markdown table from the reshaped data frame
+  kable(reshaped_df, format = "markdown", digit=3, align="lccccccc")
+}
+```
+
+#### **calculate_average_ages Function**
+
+Calculates average age for each category in each level of education (Kindergarten, Grade 1, Grade 2, Grade 3).
+
+**Arguments:**
+
+-   `data`: Input dataset
+
+**How it works:**
+
+1.  Defines the mapping of star columns to levels of education
+
+2.  Loops through each star column (stark, star1, star2, star3)
+
+3.  Extracts unique categories and calculates average age for each
+
+4.  Stores the results in a data frame
+
+5.  Reshapes the data frame to have levels of education as rows and categories as columns
+
+6.  Returns a markdown table using knitr's kable function
+
+```{r}
+age_average_by_level <- function(data) {
+  # Define the mapping of star columns to levels of education
+  level_mapping <- setNames(c("Kindergarten", "Grade 1", "Grade 2", "Grade 3"), c("stark", "star1", "star2", "star3"))
+
+  # Initialize an empty data frame to store the results
+  results_df <- data.frame()
+
+  # Loop through each star column
+  for (star_column in names(level_mapping)) {
+    # Extract the unique categories in the star column
+    categories <- unique(na.omit(data[[star_column]]))
+
+    # Loop through each category
+    for (category in categories) {
+      # Subset the data for the current category within the star column
+      category_data <- data[data[[star_column]] == category, ]
+
+      # Calculate the average age for the current category
+      average_age <- mean(category_data$age, na.rm = TRUE)
+
+      # Add the results to the data frame
+      results_df <- rbind(results_df, data.frame(Level = level_mapping[[star_column]], Category = category, Average_Age = average_age))
+    }
+  }
+
+  # Reshape the data frame to have levels of education as rows and categories as columns
+  reshaped_df <- results_df %>%
+    spread(key = Category, value = Average_Age) %>%
+    mutate(Level = factor(Level, levels = c("Kindergarten", "Grade 1", "Grade 2", "Grade 3"))) %>%
+    arrange(Level)
+
+  # Use knitr's kable function to create a markdown table from the reshaped data frame
+  kable(reshaped_df, format = "markdown", digit=3, align="lccccccc")
+}
+```
+
+### Calculate the Result
+
+```{r}
+# Calculate percentages for free lunch
+free_lunch_percentages <- calculate_percentage_by_level(STAR, "lunch")
+```
+
+```{r}
+# Calculate percentages for reading
+reading_percentages <- calculate_percentage_by_level(STAR, "read")
+```
+
+```{r}
+# Calculate percentages for math
+math_percentages <- calculate_percentage_by_level(STAR, "math")
+```
+
+```{r}
+# Combine the results into a single table
+table_1 <- rbind(free_lunch_percentages, reading_percentages, math_percentages)
+
+knitr::kable(print(table_1))
+```
+
+```{r}
+# Calculate proportions of white/asian
+asian_proportions <- race_proportions_by_level(STAR)
+
+# Print the table
+knitr::kable(print(asian_proportions))
+```
+
+```{r}
+# Calculate average ages
+average_ages <- age_average_by_level(STAR)
+
+# Print the table
+knitr::kable(print(average_ages))
+```
+
+```{r}
+average_ages <- age_average_by_level(STAR)
+knitr::kable(print(average_ages))
+```
+
+```{r}
+table(STAR$attrition)
+table(STAR$total)
+```
+
+```{r}
+# Calculate attrition percentage for each star category
+attrition_percentage <- c(
+  stark = sum(STAR$attrition == 1, na.rm = TRUE) / sum(STAR$total == 1, na.rm = TRUE) * 100,
+  star1 = sum(STAR$attrition == 2, na.rm = TRUE) / sum(STAR$total == 1, na.rm = TRUE) * 100,
+  star2 = sum(STAR$attrition == 3, na.rm = TRUE) / sum(STAR$total == 1, na.rm = TRUE) * 100,
+  star3 = sum(STAR$attrition == 0, na.rm = TRUE) / sum(STAR$total == 1, na.rm = TRUE) * 100
+)
+
+# Print the attrition percentage for each star category
+print(attrition_percentage)
+```
+
+### [2. Based on the identification strategy utilized in this paper, draw a simple DAG for major channels of effect.]{.smallcaps}
+
+```{r}
+set.seed(123)
+DAG <- dagitty('dag{
+  "Pre-program characteristics" -> "Outcome (Student Achievement)"
+  "School resources" -> "Outcome (Student Achievement)"
+  "Class size" -> "Treatment (STAR)"
+  "Treatment (STAR)" -> "Outcome (Student Achievement)"
+}')
+
+# Plot the DAG
+plot(DAG)
+```
+
+# [Part II (Average Treatment Effect)]{.smallcaps}
+
+In this question, you have the data for a sample of 100 hospitalized patients. There is a surgery intervention, D = 1 and a chemotherapy intervention, D = 0. Each patient has an observed outcome that is defined as post-treatment life span in years. (See `Surgery.dta`)
+
+## [1. Write formula for calculating the observed effect of surgery then calculate Observed Effect. Give one reason why this could be misleading in evaluating the surgery intervention.]{.smallcaps}
+
+The formula for calculating the observed effect (OE) of surgery is:
+
+$$ OE = \overline{Y}_{D=1} - \overline{Y}_{D=0} $$ where $\overline{Y}_{D=1}$ is the average post-treatment lifespan of patients who had surgery, and $\overline{Y}_{D=0}$ is the average post-treatment lifespan of patients who had chemotherapy.
+
+```{r}
+# Import data
+patient_data <- read_dta("Surgery.dta")
+
+# Calculate the average post-treatment lifespan for each group
+avg_life_span_surgery <- mean(patient_data$Y_1[patient_data$D == 1], na.rm = TRUE)
+avg_life_span_chemo <- mean(patient_data$Y_0[patient_data$D == 0], na.rm = TRUE)
+
+# Calculate the observed effect
+observed_effect <- avg_life_span_surgery - avg_life_span_chemo
+
+# Output the observed effect
+print(observed_effect)
+```
+
+## [2. You have the counterfactual outcomes in the dataset. According to this, have specialists in the hospital correctly determined the treatment (surgery or chemo) for all patients?]{.smallcaps}
+
+-   If the patient received surgery ($D = 1$), the correct treatment is surgery if the lifespan with surgery (is greater than the lifespan with chemotherapy $Y_0$.)
+
+-   If the patient received chemotherapy ($D = 0$), the correct treatment is chemotherapy if the lifespan with chemotherapy $Y_0$ is greater than or equal to the lifespan with surgery $Y_1$.
+
+We count the number of patients who received the correct treatment by summing up the `correct_treatment` column. This gives us the total number of patients who received the correct treatment.
+
+We count the number of patients who received the incorrect treatment by summing up the negation of the `correct_treatment` column. This gives us the total number of patients who received the incorrect treatment.
+
+```{r}
+# Add a column to check if the treatment was correctly determined
+patient_data$correct_treatment <- ifelse(patient_data$D == 1, patient_data$Y_1 > patient_data$Y_0, patient_data$Y_0 >= patient_data$Y_1)
+
+# Count how many patients received the correct treatment
+correct_treatment_count <- sum(patient_data$correct_treatment)
+
+# Count how many patients received the incorrect treatment
+incorrect_treatment_count <- sum(!patient_data$correct_treatment)
+
+# Print the results
+print(paste("Number of patients who received the correct treatment:", correct_treatment_count))
+print(paste("Number of patients who received the incorrect treatment:", incorrect_treatment_count))
+```
+
+The result shows that:
+
+-   97 patients (out of 100) received the correct treatment, meaning that the specialists correctly determined the treatment (surgery or chemotherapy) that would have resulted in a longer lifespan for these patients.
+
+-   3 patients (out of 100) received the incorrect treatment, meaning that the specialists made an error in determining the treatment, and the patients received a treatment that would have resulted in a shorter lifespan compared to the alternative treatment.
+
+In other words, the specialists made correct treatment decisions for 97% of the patients (97/100) and incorrect decisions for 3% of the patients (3/100).
+
+## [3. Calculate the Average Treatment Effect (ATE).]{.smallcaps}
+
+```{r}
+# Assuming 'patient_data' is already loaded with the correct columns
+
+# Calculate the difference in outcomes for each patient
+patient_data$diff_outcomes <- patient_data$Y_1 - patient_data$Y_0
+
+# Calculate the Average Treatment Effect (ATE)
+ate <- mean(patient_data$diff_outcomes, na.rm = TRUE)
+
+# Output the ATE
+print(ate)
+
+```
+
+## [4. Calculate average treatment effect on the treated (ATT), as well as average treatment effect on the untreated (ATU). Show that ATE is the weighted average of ATT and ATU using our sample.]{.smallcaps}
+
+To calculate the Average Treatment Effect on the Treated (ATT) and the Average Treatment Effect on the Untreated (ATU), and to show that the Average Treatment Effect (ATE) is the weighted average of ATT and ATU, we can follow these steps:
+
+1.  **ATT** is the average effect of the treatment on those who received the treatment. It's calculated as the difference in outcomes between the treated group and what their outcomes would have been had they not received the treatment.
+
+2.  **ATU** is the average effect of the treatment on those who did not receive the treatment. It's calculated as the difference in outcomes between what the untreated group's outcomes would have been had they received the treatment and their actual outcomes.
+
+The formulas for ATT and ATU are:
+
+$$ ATT = \mathbb{E}[Y_1 - Y_0 | D=1] $$ $$ ATU = \mathbb{E}[Y_1 - Y_0 | D=0] $$
+
+To show that ATE is the weighted average of ATT and ATU, we an use :
+
+$$ ATE = p \cdot ATT + (1-p) \cdot ATU $$
+
+where $p$ is the proportion of the sample that received the treatment.
+
+```{r}
+# Calculate ATT
+att <- mean(patient_data$Y_1[patient_data$D == 1] - patient_data$Y_0[patient_data$D == 1], na.rm = TRUE)
+
+# Calculate ATU
+atu <- mean(patient_data$Y_1[patient_data$D == 0] - patient_data$Y_0[patient_data$D == 0], na.rm = TRUE)
+
+# Calculate the proportion of the sample that received the treatment
+p <- mean(patient_data$D, na.rm = TRUE)
+
+# Calculate ATE as the weighted average of ATT and ATU
+ate_weighted <- p * att + (1 - p) * atu
+
+# Check and print if ATE_weighted == ATE
+if (abs(ate_weighted - ate) < 0.000001) {
+  print("ATE_weighted is equal to ATE")
+} else {
+  print("ATE_weighted is not equal to ATE")
+  print(paste("ATE_weighted:", ate_weighted))
+  print(paste("ATE:", ate))
+}
+
+```
+
+Output code the code shows that the indirect calculation will end up the same result as the direct one.
+
+## [5. Now suppose we did not have data on counterfactual outcomes. With what assumptions could we get ATE from the observed effect?]{.smallcaps}
+
+To get the Average Treatment Effect (ATE) from the observed effect without counterfactual outcomes, we need to make the following assumptions:
+
+1.  **Selection on observables**: We assume that the treatment assignment is random conditional on the observed covariates. This means that the treatment and control groups have the same distribution of observed characteristics, and any differences in outcomes are due to the treatment effect.
+
+2.  **Selection on unobservables**: We assume that the treatment assignment is random conditional on the unobserved covariates as well. This means that the treatment and control groups have the same distribution of unobserved characteristics, and any differences in outcomes are due to the treatment effect.
+
+3.  **No confounding**: We assume that there are no confounding variables that affect both the treatment assignment and the outcome. This means that the treatment assignment is independent of the potential outcomes, and any differences in outcomes are due to the treatment effect.
+
+4.  **No reverse causality**: We assume that the treatment does not affect the outcome through a third variable. This means that the treatment effect is not biased by reverse causality.
+
+Under these assumptions, the observed effect (OE) is an unbiased estimator of the Average Treatment Effect (ATE).
+
+$$
+OE=Y_{D=1​}−Y_{D=0}​=ATE
+$$
+
+# [Part III (]{.smallcaps}Variables to Control)
+
+The following items describe situations where researchers use the Conditional Independence Assumption (CIA) as their identification assumption. For each scenario, assess their decision on variables to control by attributing each item to one of the 5 cases discussed in class. Include any good controls that help the researcher to capture the causal effect. Also draw the DAG in R.
+
+## [1. Nutrition Study: A nutritionist wants to determine if consuming a high-protein diet improves cognitive function in adolescents. In her analysis, she controls for the participants’ hours of sleep and type of school they attend.]{.smallcaps}
+
+The researcher's decision to control for hours of sleep and type of school is a good start, as these variables could potentially affect both the treatment (high-protein diet) and the outcome (cognitive function). However, there may be other confounding variables that need to be considered, such as:
+
+-   Physical activity level
+
+-   Family socioeconomic status
+
+-   Pre-existing medical conditions
+
+Including these variables as controls could help to reduce bias and better isolate the causal effect of the high-protein diet on cognitive function.
+
+```{r}
+# Set the seed for reproducibility
+set.seed(12345)
+
+# Define the DAG
+nutrition_study <- dagitty('dag {
+  "High-Protein Diet" -> "Cognitive Function"
+  "Hours of Sleep" -> "Cognitive Function"
+  "Type of School" -> "Cognitive Function"
+  "Physical Activity" -> "Cognitive Function"
+  "Socioeconomic Status" -> "Cognitive Function"
+  "Pre-existing Medical Conditions" -> "Cognitive Function"
+  "Physical Activity" -> "High-Protein Diet"
+  "Socioeconomic Status" -> "High-Protein Diet"
+}')
+
+# Plot the DAG
+plot(nutrition_study)
+
+```
+
+## [2. Urban Development Study: An urban planner investigates the impact of public parks on neighborhood crime rates. In his model, he includes the average income of the neighborhood and the distance to the nearest police station as control variables.]{.smallcaps}
+
+**Good Control (Average Income)**
+
+-   Average income is likely a confounder, which means it affects both:
+
+    -   Whether a neighborhood gets public parks (the treatment)
+
+    -   The crime rate in the neighborhood (the outcome)
+
+-   Wealthier neighborhoods might:
+
+    -   Be more likely to get public parks
+
+    -   Already have lower crime rates
+
+-   By taking average income into account, we can figure out the real effect of public parks on crime rates, without the influence of wealth.
+
+**Bad Control (Distance to Police Station)**
+
+-   Controlling for distance to the police station might not be a good idea. This is because:
+
+    -   Public parks can lead to a police station being built closer by (the treatment affects the control).
+
+    -   Having a police station nearby can help reduce crime (the control affects the outcome).
+
+-   If we control for distance to the police station, we might accidentally hide or eliminate the real effect of public parks on crime rates.
+
+```{r}
+library(dagitty)
+
+# Set the seed for reproducibility
+set.seed(123)
+
+# Define the DAG for the Urban Development Study
+urban_development_study <- dagitty('dag {
+  "Public Parks" -> "Crime Rates"
+  "Average Income" -> "Crime Rates"
+  "Average Income" -> "Public Parks"
+  "Distance to Police Station" -> "Crime Rates"
+  "Public Parks" -> "Distance to Police Station"
+}')
+
+# Plot the DAG
+plot(urban_development_study)
+
+```
+
+## [3. To examine the effect of gender discrimination on women’s earnings, a researcher controls for their work experience and IQ in a sample of working women and men.]{.smallcaps}
+
+-   To examine the effect of gender discrimination on women's earnings, a researcher controls for work experience and IQ in a sample of working women and men. However, to gain a more comprehensive understanding, it's essential to also consider the following key omitted variables:
+
+    -   Education level (confounding variable): Women's education levels may differ, impacting earnings and potentially confounding the relationship between gender discrimination and earnings.
+
+    -   Occupation/Industry (confounding variable): Women's underrepresentation in high-paying fields or industries may influence earnings and confound the effect of gender discrimination.
+
+-   Family and caregiving responsibilities (mediating variable): Women's caregiving responsibilities may affect their career choices and earnings, potentially mediating the effect of gender discrimination on earnings.
+
+By including these crucial factors, the study can better isolate the effect of gender discrimination on women's earnings.
+
+```{r}
+
+# Define the DAG
+gender_discrimination <- dagitty('dag {
+  "Gender Discrimination" -> "Earnings"
+  "Work Experience" -> "Earnings"
+  "IQ" -> "Earnings"
+  "Education Level" -> "Earnings"
+  "Occupation/Industry" -> "Earnings"
+  "Education Level" -> "Gender Discrimination"
+  "Occupation/Industry" -> "Gender Discrimination"
+}')
+
+# Plot the DAG
+plot(gender_discrimination)
+```
+
+## [4. Environmental Study: A researcher explores whether proximity to industrial areas affects respiratory health. In the analysis, she controls for smoking habits.]{.smallcaps}
+
+The researcher is correct to control for smoking habits, as they are a confounding variable that can affect both the exposure (industrial pollution) and the outcome (respiratory health). By accounting for smoking habits, the researcher can isolate the effect of industrial pollution on respiratory health.
+
+-   Confounding Variables: Smoking habits are a confounder, as they are associated with both industrial pollution and respiratory health.
+
+    -   People who smoke may be more likely to work in industries that are commonly found in industrial areas (e.g., manufacturing, construction).
+
+    -   People who smoke may be more likely to live in areas with higher industrial pollution due to socioeconomic factors (e.g., lower-income neighborhoods tend to have more industrial facilities).
+
+-   Moderating Variables: Factors like pre-existing health conditions or age might modify the effect of industrial pollution on respiratory health. So their interaction with other variables should be analyzed.
+
+```{r}
+set.seed(100)
+# Define the DAG
+environmental_study <- dagitty('dag {
+  "Industrial Area Proximity" -> "Respiratory Health"
+  "Smoking Habits" -> "Respiratory Health"
+  "Pre-existing Health Conditions" -> "Respiratory Health"
+  "Age" -> "Respiratory Health"
+  
+  "Industrial Area Proximity" -> "Pre-existing Health Conditions" -> "Respiratory Health"
+  "Industrial Area Proximity" -> "Age" -> "Respiratory Health"
+  
+  "Smoking Habits" -> "Industrial Area Proximity"
+}')
+
+# Plot the DAG
+plot(environmental_study)
+
+```
+
+## [5. Economic Inequality Study: An economist examines how minimum wage increases affect employment levels. He controls for the overall economic growth rate of the region in his analysis.]{.smallcaps}
+
+In this case, economic growth rate might be a bad control because it's potentially a mediator, not just a confounder. A better approach might be to include other confounding variables that affect both minimum wage increases and employment levels, such as:
+
+-   Regional industry mix
+
+-   Demographic characteristics (e.g., age, education)
+
+-   Local labor market conditions (e.g., unemployment rate)
+
+By controlling for these confounding variables, the analysis can better isolate the causal effect of minimum wage increases on employment levels.
+
+```{r}
+# Define the DAG
+economic_inequality <- dagitty('dag {
+  "Minimum Wage Increase" -> "Employment Levels"
+  "Minimum Wage Increase" -> "Economic Growth Rate"
+  "Economic Growth Rate" -> "Employment Levels"
+  "Regional Industry Mix" -> "Minimum Wage Increase"
+  "Regional Industry Mix" -> "Employment Levels"
+  "Demographic Characteristics" -> "Minimum Wage Increase"
+  "Demographic Characteristics" -> "Employment Levels"
+  "Local Labor Market Conditions" -> "Minimum Wage Increase"
+  "Local Labor Market Conditions" -> "Employment Levels"
+}')
+
+# Plot the DAG
+plot(economic_inequality)
+```

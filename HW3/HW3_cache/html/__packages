@@ -1,0 +1,15 @@
+knitr
+RODBC
+dplyr
+tibble
+ggplot2
+tidyverse
+tidyr
+readr
+purrr
+stringr
+forcats
+lubridate
+stargazer
+reshape2
+glm2

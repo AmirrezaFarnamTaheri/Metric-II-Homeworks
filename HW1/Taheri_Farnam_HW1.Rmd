@@ -1,0 +1,1447 @@
+---
+title: "Homework 1"
+author: "Farnam Taheri"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(cache = TRUE)
+```
+
+# Install and Load Packages
+
+## Install Necessary Packages
+
+```{r}
+# install.packages("RODBC")
+# install.packages("tidyverse")
+# install.packages("lemon")
+```
+
+## Load Necessary Packages
+
+```{r}
+  library(knitr)
+  library(RODBC)
+  library(dplyr)
+  library(tibble)
+  library(ggplot2)
+  library(tidyverse)
+  library(lemon)
+  library(reshape2)
+```
+
+## Lemon Print!
+
+Use lemon print function for knit printing
+
+```{r}
+knit_print.data.frame <- lemon_print
+```
+
+# Load Access Files
+
+## Define Function for Loading Data
+
+```{r}
+  import_access_table <- function(working_dir, filename, table_name, columns) {
+    # Establish connection to the Access database
+    db <- odbcDriverConnect(
+      paste0("Driver={Microsoft Access Driver (*.mdb, *.accdb)};
+             DBQ=", file.path(working_dir, paste0(filename, ".mdb")))
+    )
+    
+    # Construct the query
+    query <- paste0(
+      "SELECT ", paste(columns, collapse = ", "),
+      " FROM ", table_name
+    )
+    
+    # Execute the query and fetch the result
+    df <- as_tibble(
+      sqlQuery(channel = db, query = query, as.is = TRUE)
+    )
+    
+    # Close the database connection
+    odbcClose(db)
+    
+    return(df)
+}
+```
+
+## Set Working Directory
+
+```{r}
+# Set the working directory
+setwd("C:/Users/Acer/Desktop/Metrics/HW/Data")
+
+# Assign the working directory to a variable
+working_dir <- getwd()
+
+```
+
+## Load Datasets
+
+```{r}
+# Load LFS97 Dataset
+filename <- "LFS97_RawData"
+table_name <- "LFS_RawData1397"
+columns <- c("pkey", "F2_D04", "F2_D07", "F2_D19", "F3_D11", "F3_D16SHASLIS",  "F3_D44", "IW_Yearly", "ActivityStatus")
+
+LFS97 <- import_access_table(working_dir, filename, table_name, columns)
+```
+
+```{r}
+# Load LFS98 Dataset
+filename <- "LFS_RawData98_990625"
+table_name <- "LFS_RawData"
+columns <- c("pkey", "F2_D04", "F2_D07", "F2_D19", "F3_D11", "F3_D16SHASLIS", "F3_D44", "IW_Yearly", "ActivityStatus")
+
+LFS98 <- import_access_table(working_dir, filename, table_name, columns)
+```
+
+```{r}
+# Load LFS99 Dataset
+filename <- "LFS_RawData99_14000615"
+table_name <- "LFS_RawData"
+columns <- c("pkey", "F2_D04", "F2_D07", "F2_D19", "F3_D11", "F3_D16SHASLIS", "F3_D44", "IW_Yearly", "ActivityStatus")
+
+LFS99 <- import_access_table(working_dir, filename, table_name, columns)
+```
+
+```{r}
+# Load LFS400 Dataset
+filename <- "LFS_RawData1400_14010130"
+table_name <- "LFS_RawData"
+columns <- c("pkey", "F2_D04", "F2_D07", "F2_D19", "F3_D11", "F3_D16SHASLIS", "F3_D44", "IW_Yearly", "ActivityStatus")
+
+LFS400 <- import_access_table(working_dir, filename, table_name, columns)
+```
+
+```{r}
+# Load LFS401 Dataset
+filename <- "LFS_RawData1401_14020712"
+table_name <- "LFS_RawData"
+columns <- c("pkey", "F2_D04", "F2_D07", "F2_D19", "F3_D11", "F3_D16SHASLIS",  "F3_D44", "IW_Yearly", "ActivityStatus")
+
+LFS401 <- import_access_table(working_dir, filename, table_name, columns)
+```
+
+# Rename columns for data frames
+
+First, we define a list of dataset names called `datasets` and another list containing corresponding vectors of new column names called `new_colnames`.
+
+```{r}
+# List of dataset names
+datasets <- c("LFS97", "LFS98", "LFS99", "LFS400", "LFS401")
+
+# List of new column names
+new_colnames <- list(
+  c("Address", "Sex", "Age", "Marriage", "Employment Role", "Work H/Week", "Job Leave", "Weight", "Employment"), # New column names for LFS97
+  c("Address", "Sex", "Age", "Marriage", "Employment Role", "Work H/Week", "Job Leave", "Weight", "Employment"), # New column names for LFS98
+  c("Address", "Sex", "Age", "Marriage", "Employment Role", "Work H/Week", "Job Leave", "Weight", "Employment"), # New column names for LFS99
+  c("Address", "Sex", "Age", "Marriage", "Employment Role", "Work H/Week", "Job Leave", "Weight", "Employment"), # New column names for LFS400
+  c("Address", "Sex", "Age", "Marriage", "Employment Role", "Work H/Week", "Job Leave", "Weight", "Employment")  # New column names for LFS401
+)
+```
+
+Next, we iterate over the `datasets` list and rename columns in each dataset according to the corresponding vector of new column names.
+
+```{r}
+# Loop over each dataset
+for (i in seq_along(datasets)) {
+  # Rename columns of the corresponding dataset
+  assign(datasets[i], `colnames<-`(get(datasets[i]), new_colnames[[i]]))
+}
+```
+
+# 1. Workforce Participation Analysis.
+
+## Identify the three provinces with the highest and lowest participation rates in the year 1397.
+
+First, we'll create a dataframe containing individuals aged 15 and above, named `LFS97_above_15`.
+
+```{r}
+# Filter data for individuals aged 15 and above
+LFS97_above_15 <- LFS97 %>%
+  filter(Age >= 15)
+
+# Extract province from Address column
+LFS97_above_15 <- LFS97_above_15 %>%
+  mutate(province = substr(Address, start = 3, stop = 4))
+
+```
+
+### Participation Calculation Function:
+
+Define a custom function to calculate the participation rate.
+
+-   A custom function `calculate_participation_rate` is defined to calculate the participation rate, handling null values if the input vector is empty.
+-   Calculate the total weight of participated individuals and the total weighted population.
+-   Calculate the participation rate as the ratio of employed weight to total weight.
+
+```{r}
+# Define a function to calculate participation rate
+calculate_participation_rate <- function(employment_status, weights) {
+  employed_weight <- sum(weights[employment_status == 1], na.rm = TRUE) + sum(weights[employment_status == 2], na.rm = TRUE)
+  total_weight <- sum(weights, na.rm = TRUE)
+  participation_rate <- employed_weight / total_weight
+  return(participation_rate)
+}
+```
+
+### Data Aggregation and Processing:
+
+#### **Calculating Participation Rate**:
+
+Calculate participation rates for each province, sort them, and select the top and bottom three provinces.
+
+-   Group the `LFS97_above_15` dataset by province and calculate the participation rate for each group using the custom function.
+-   Sort the provinces based on participation rates in descending order.
+-   Select the top three and bottom three provinces using `head()` and `tail()`.
+
+```{r}
+
+# Calculate participation rate for each province with weights
+participation_rates <- LFS97_above_15 %>%
+  group_by(province) %>%
+  summarize(participation_rate = calculate_participation_rate(Employment, Weight))
+
+# Sort provinces based on participation rates
+participation_rates_sorted <- participation_rates %>%
+  arrange(desc(participation_rate))
+
+# Select the top three and bottom three provinces
+top_three_97 <- head(participation_rates_sorted, 3)
+bottom_three_97 <- tail(participation_rates_sorted, 3)
+```
+
+#### **Replacing Provinces' Code by their Names:**
+
+Here we are defining a dictionary for name of provinces, which we later use it for replacing code of provinces with their name.
+
+```{r}
+# Create the province dictionary
+province_dict <- list(
+  "00" = "Markazi",
+  "01" = "Gilan",
+  "02" = "Mazandaran",
+  "03" = "East Azerbaijan",
+  "04" = "West Azerbaijan",
+  "05" = "Kermanshah",
+  "06" = "Khuzestan",
+  "07" = "Fars",
+  "08" = "Kerman",
+  "09" = "Razavi Khorasan",
+  "10" = "Isfahan",
+  "11" = "Sistan and Baluchestan",
+  "12" = "Kurdistan",
+  "13" = "Hamedan",
+  "14" = "Chaharmahal and Bakhtiari",
+  "15" = "Lorestan",
+  "16" = "Ilam",
+  "17" = "Kohgiluyeh and Boyer-Ahmad",
+  "18" = "Bushehr",
+  "19" = "Zanjan",
+  "20" = "Semnan",
+  "21" = "Yazd",
+  "22" = "Hormozgan",
+  "23" = "Tehran",
+  "24" = "Ardabil",
+  "25" = "Qom",
+  "26" = "Qazvin",
+  "27" = "Golestan",
+  "28" = "North Khorasan",
+  "29" = "South Khorasan",
+  "30" = "Alborz",
+  "Country" = "Iran"
+)
+```
+
+Now we will replace codes by names of provinces.
+
+```{r}
+# Replace province codes with names in the filtered dataframe
+bottom_three_97$province <- province_dict[bottom_three_97$province]
+top_three_97$province <- province_dict[top_three_97$province]
+```
+
+### Printing Results:
+
+Display the top three and bottom three provinces.
+
+```{r}
+# Print the results
+knitr::kable(top_three_97, align = "lc", caption = "Top three provinces in participation rates", row.names = FALSE)
+```
+
+```{r}
+# Print the results
+knitr::kable(top_three_97, align = "lc", caption = "Top three provinces in participation rates", row.names = FALSE)
+```
+
+### Create New Dataframe with Top and Bottom Provinces:
+
+Concatenate the `top_three` and bottom_three dataframes using the `rbind()` function and create a new dataframe named `top_bottom_three`.
+
+```{r}
+# Concatenate the top_three and bottom_three dataframes
+top_bottom_three_97 <- rbind(top_three_97, bottom_three_97)
+```
+
+## Compare these rates with the national average for the same year and report the results.
+
+We want to compare province participation rates with the national average to identify variations above and below the average.
+
+**Calculation of National Average:**
+
+-   The national average participation rate is computed using `calculate_participation_rate` function.
+
+```{r}
+# Calculate the national average participation rate for the specified year
+national_average <- calculate_participation_rate(LFS97_above_15$Employment, LFS97_above_15$Weight)
+cat("National average for participation rate is:", national_average)
+```
+
+**Comparison with National Average:**
+
+-   Provincial participation rates are compared to the national average. Provinces with rates higher than the average are labeled "Above Average", while those with lower rates are labeled "Below Average".
+
+```{r}
+# Compare participation rates with the national average
+top_bottom_three_97 <- top_bottom_three_97 %>%
+  mutate(compare_to_average = ifelse(participation_rate > national_average, "Above Average", "Below Average"))
+
+
+# Report the results
+knitr::kable(top_bottom_three_97, align = "lcc", caption = "Comparison of Participation Rates with National Average")
+```
+
+## Visualize the participation rates for these provinces and the whole country from 1397 to 1401.
+
+### **Function to Filter Individuals Above the Age of 15**:
+
+-   We define function`filter_above_15` to filter individuals above the age of 15 from each dataset and create a new dataframe.
+
+```{r}
+# Function to filter individuals above the age of 15 from each dataset and create a new dataframe
+filter_above_15 <- function(dataset) {
+  above_15 <- dataset[dataset$Age >= 15, ]
+  return(above_15)
+}
+```
+
+### Function to Extract Province Information:
+
+-   We define function `add_province_column` to extract province information from the 'Address' column and add it as a new column to each dataset.
+
+```{r}
+# Function to extract province information from the 'Address' column and add it as a new column to each dataset
+add_province_column <- function(dataset) {
+  dataset$province <- substr(dataset$Address, start = 3, stop = 4)
+  return(dataset)
+}
+
+```
+
+### Apply Functions to Each Dataset:
+
+Apply the filtering and province extraction functions to each year's dataset.
+
+```{r}
+# Apply filter_above_15 function to each dataset
+filtered_datasets <- lapply(list(LFS97, LFS98, LFS99, LFS400, LFS401), filter_above_15)
+
+# Apply add_province_column function to each filtered dataset
+datasets_with_province <- lapply(filtered_datasets, add_province_column)
+
+# Access the datasets with province information
+LFS1397_above15_province <- datasets_with_province[[1]]
+LFS1398_above15_province <- datasets_with_province[[2]]
+LFS1399_above15_province <- datasets_with_province[[3]]
+LFS1400_above15_province <- datasets_with_province[[4]]
+LFS1401_above15_province <- datasets_with_province[[5]]
+```
+
+### Remove Useless Datasets:
+
+In this part, we will remove datasets which are no longer needed.
+
+```{r}
+# Remove useless datasets
+rm(LFS97, LFS97_above_15, LFS98, LFS99, LFS400, LFS401, datasets_with_province, filtered_datasets)
+```
+
+### Function Definition to Calculate Participation Rates:
+
+-   Function `calculate_participation_rates` iterates over each year from 1397 to 1401 and calculates the participation rates for both the whole country and individual provinces.
+-   It stores the results in a dataframe `participation_data` and returns it.
+
+```{r}
+# Function to calculate participation rates for each year and province
+calculate_participation_rates <- function(dataset) {
+  # Create an empty dataframe to store the results
+  participation_data <- data.frame(Year = numeric(), Province = character(), Participation_Rate = numeric())
+  
+  # Extract year from dataset name
+  dataset_name <- deparse(substitute(dataset))
+  year <- as.numeric(str_extract(string = dataset_name, pattern = "(?<=LFS)\\d+"))
+  
+  # Calculate participation rates for the whole country
+  country_participation_rate <- calculate_participation_rate(dataset$Employment, dataset$Weight)
+  
+  # Store participation rate for the whole country
+  participation_data <- rbind(participation_data, data.frame(Year = year, Province = "Country", Participation_Rate = country_participation_rate))
+  
+  # Calculate participation rates for provinces
+  province_participation_rates <- aggregate(Employment ~ province, data = dataset, FUN = function(x) calculate_participation_rate(x, dataset$Weight))
+  
+  # Store participation rates for provinces
+  participation_data <- rbind(participation_data, data.frame(Year = rep(year, nrow(province_participation_rates)), Province = province_participation_rates$province, Participation_Rate = province_participation_rates$Employment))
+  
+  return(participation_data)
+}
+```
+
+### Calculate Participation Rates for Each Dataset:
+
+In this part, we calculate participation rates for each dataset(LFS97, LFS98, LFS99, LFS400, LFS401) by calling the `calculate_participation_rates` function with the respective datasets.
+
+```{r}
+# Calculate participation rates for each dataset
+participation_rates_LFS1397 <- calculate_participation_rates(LFS1397_above15_province)
+participation_rates_LFS1398 <- calculate_participation_rates(LFS1398_above15_province)
+participation_rates_LFS1399 <- calculate_participation_rates(LFS1399_above15_province)
+participation_rates_LFS1400 <- calculate_participation_rates(LFS1400_above15_province)
+participation_rates_LFS1401 <- calculate_participation_rates(LFS1401_above15_province)
+
+```
+
+### Visualization of Participation Rates:
+
+#### **Data Manipulation**:
+
+-   The following block renames the participation rate columns in each dataframe to match specific names of each year.
+-   Then we merge the participation columns from multiple dataframes based on provinces, resulting in a single dataframe containing participation rates for different years and provinces.
+-   The participation rates are multiplied by 100 and rounded to one decimal place.
+
+```{r}
+# Rename participation rate columns in each dataframe
+names(participation_rates_LFS1397)[names(participation_rates_LFS1397) == "Participation_Rate"] <- "Participation_LFS1397"
+names(participation_rates_LFS1398)[names(participation_rates_LFS1398) == "Participation_Rate"] <- "Participation_LFS1398"
+names(participation_rates_LFS1399)[names(participation_rates_LFS1399) == "Participation_Rate"] <- "Participation_LFS1399"
+names(participation_rates_LFS1400)[names(participation_rates_LFS1400) == "Participation_Rate"] <- "Participation_LFS1400"
+names(participation_rates_LFS1401)[names(participation_rates_LFS1401) == "Participation_Rate"] <- "Participation_LFS1401"
+
+# Merge participation columns from old dataframes based on provinces
+merged_participation <- merge(merge(merge(merge(participation_rates_LFS1397[, -1], participation_rates_LFS1398[, -1], by = "Province", all = TRUE), participation_rates_LFS1399[, -1], by = "Province", all = TRUE), participation_rates_LFS1400[, -1], by = "Province", all = TRUE), participation_rates_LFS1401[, -1], by = "Province", all = TRUE)
+
+# Multiply each participation rate by 100 and round it to one decimal place
+merged_participation[, -1] <- round(merged_participation[, -1] * 100, 1)
+
+# Print the merged dataframe
+knitr::kable(merged_participation, align = "lccccc", caption = "Participation Rates Over Time (By Province Codes)", row.names = FALSE)
+```
+
+#### **Data Filtering:**
+
+-   Retains only selected provinces with specific codes.
+-   Selected provinces represent top and bottom three provinces in year 97 along with the country average.
+
+```{r paged.print=TRUE}
+# Filter and keep only the provinces 00, 25, 16, 09, 24, and 28
+filtered_merged_participation <- subset(merged_participation, Province %in% c("00", "25", "16", "09", "24", "28", "Country"))
+
+# Replace province codes with names in the filtered dataframe
+filtered_merged_participation$Province <- province_dict[filtered_merged_participation$Province]
+
+# Print the filtered dataframe
+knitr::kable(filtered_merged_participation, align = "lccccc", caption = "Participation rates over time for selected provinces", row.names = FALSE)
+```
+
+#### **Table manipulation:**
+
+**Converting Data Types:** - Converts certain columns to numeric data type for analysis.
+
+```{r}
+# Convert province column to character
+filtered_merged_participation$Province <- as.character(filtered_merged_participation$Province)
+
+# Convert participation rate column to numeric
+filtered_merged_participation$Participation_LFS1397 <- as.numeric(filtered_merged_participation$Participation_LFS1397)
+filtered_merged_participation$Participation_LFS1398 <- as.numeric(filtered_merged_participation$Participation_LFS1398)
+filtered_merged_participation$Participation_LFS1399 <- as.numeric(filtered_merged_participation$Participation_LFS1399)
+filtered_merged_participation$Participation_LFS1400 <- as.numeric(filtered_merged_participation$Participation_LFS1400)
+filtered_merged_participation$Participation_LFS1401 <- as.numeric(filtered_merged_participation$Participation_LFS1401)
+```
+
+**Shortening Column Names:** - Removes prefix "Participation_LFS" from column names. - Retains only year numbers.
+
+```{r}
+# Shorten column names
+shortened_column_names <- gsub("Participation_LFS(\\d+)", "\\1", names(filtered_merged_participation)[-1])
+
+# Rename the first column
+names(filtered_merged_participation)[1] <- "Province"
+
+# Create a data frame with shortened column names
+shortened_data <- cbind(filtered_merged_participation[, 1, drop = FALSE], filtered_merged_participation[, -1])
+names(shortened_data)[-1] <- shortened_column_names
+
+# Plot the table
+knitr::kable(shortened_data, align = "c", caption = "Participation Rates Over Time for Selected Provinces")
+```
+
+#### **Plotting Participation Rates:**
+
+**Melting Dataframe:** Converts dataframe to long format for plotting.
+
+```{r}
+# Convert province column to character
+shortened_data$Province <- as.character(shortened_data$Province)
+
+# Melt the dataframe to long format for plotting
+melted_data <- reshape2::melt(shortened_data, id.vars = "Province")
+```
+
+**Plotting:**
+
+```{r}
+# Plot participation rates over time for selected provinces
+ggplot(melted_data, aes(x = variable, y = value, color = Province, group = Province)) +
+  geom_line(size = 1.5) + 
+  labs(x = "Year", y = "Participation Rate",
+       title = "Participation Rates Over Time for Selected Provinces",
+               caption = "Source: Iran's LFS Data 1397-1401") +
+  theme_minimal() +
+  theme(legend.position = "bottom",
+                plot.title = element_text(hjust = 0.5),      # Center-align the title 
+        plot.caption = element_text(hjust = 0.5)) +          # Center-align the caption)
+  scale_color_manual(values = rainbow(length(unique(melted_data$Province))))
+```
+
+### Remove Useless Datasets:
+
+In this part, we will remove datasets which are no longer needed.
+
+```{r}
+# Remove useless datasets
+rm(participation_rates_LFS1397, participation_rates_LFS1398, participation_rates_LFS1399, participation_rates_LFS1400, participation_rates_LFS1401, filtered_merged_participation)
+```
+
+# 2. Gender-Specific Participation Rates.
+
+## Calculate the male and female participation rates in the provinces with the highest and lowest rates, and compare them with the national rates for the year 1397 and report the results.
+
+### Split the Data by Sex for each year
+
+#### Define `split_data_by_gender`function:
+
+This function splits data into two datasets by `Sex` column.
+
+```{r}
+split_data_by_gender <- function(dataset) {
+  # Split dataset into male and female subsets
+  male_data <- dataset[dataset$Sex == 1, ]
+  female_data <- dataset[dataset$Sex == 2, ]
+  
+  return(list(male_data = male_data, female_data = female_data))
+}
+
+```
+
+#### Apply the Function:
+
+Now we will apply the function on each year and assign them to the correspondant variable.
+
+```{r}
+# Apply the function and assign male and female data separately for each year
+female_data_1397 <- split_data_by_gender(LFS1397_above15_province)$female_data
+male_data_1397 <- split_data_by_gender(LFS1397_above15_province)$male_data
+
+female_data_1398 <- split_data_by_gender(LFS1398_above15_province)$female_data
+male_data_1398 <- split_data_by_gender(LFS1398_above15_province)$male_data
+
+female_data_1399 <- split_data_by_gender(LFS1399_above15_province)$female_data
+male_data_1399 <- split_data_by_gender(LFS1399_above15_province)$male_data
+
+female_data_1400 <- split_data_by_gender(LFS1400_above15_province)$female_data
+male_data_1400 <- split_data_by_gender(LFS1400_above15_province)$male_data
+
+female_data_1401 <- split_data_by_gender(LFS1401_above15_province)$female_data
+male_data_1401 <- split_data_by_gender(LFS1401_above15_province)$male_data
+
+```
+
+### Calculate the participation Rates:
+
+-   Participation rates are calculated for each gender using the `calculate_participation_rates` function.
+
+```{r}
+female_participation_1397 <- calculate_participation_rates(female_data_1397)
+female_participation_1398 <- calculate_participation_rates(female_data_1398)
+female_participation_1399 <- calculate_participation_rates(female_data_1399)
+female_participation_1400 <- calculate_participation_rates(female_data_1400)
+female_participation_1401 <- calculate_participation_rates(female_data_1401)
+
+male_participation_1397 <- calculate_participation_rates(male_data_1397)
+male_participation_1398 <- calculate_participation_rates(male_data_1398)
+male_participation_1399 <- calculate_participation_rates(male_data_1399)
+male_participation_1400 <- calculate_participation_rates(male_data_1400)
+male_participation_1401 <- calculate_participation_rates(male_data_1401)
+```
+
+### Sorting and Printing Top and Bottom Rows:
+
+In this part, we will sort separated data frames by particiaption rates and print the top and bottom rows for males and females separately for the year 1397.
+
+#### Sorting:
+
+-   Lists `male_participation_list` and `female_participation_list` are initialized.
+
+```{r}
+# List of male and female participation dataframes for different years
+male_participation_list <- list(male_participation_1397, male_participation_1398, male_participation_1399, male_participation_1400, male_participation_1401)
+female_participation_list <- list(female_participation_1397, female_participation_1398, female_participation_1399, female_participation_1400, female_participation_1401)
+```
+
+-   The following loop iterates over each year's male and female participation datasets.
+
+-   For each iteration, it sorts the male and female participation dataframes by descending order of the `Participation_Rate` column.
+
+-   It renames the `Province` column using the province dictionary to replace province codes with their names.
+
+-   The`Year` column is updated to show the corresponding year of the dataset.
+
+-   The `Participation_Rate` column is multiplied by 100 and rounded to one decimal place to represent the rate as a percentage. The column is renamed to \`Participation\`
+
+-   Finally, the sorted, renamed, and updated datasets are assigned back to their original variables.
+
+```{r}
+# Loop through each year to sort and rename male and female participation data
+for (i in 1:length(male_participation_list)) {
+  
+  # Sort male participation data for the current year and rename province column
+  male_participation_list[[i]] <- male_participation_list[[i]] %>%
+    arrange(desc(Participation_Rate)) %>%
+    mutate(Province = province_dict[as.character(Province)]) %>%
+    mutate(Year = 1397 + i - 1) %>%
+    mutate(Participation_Rate = round(Participation_Rate * 100, 1)) %>%
+    rename(Participation = Participation_Rate)  # Rename Participation_Rate column
+  
+  # Sort female participation data for the current year and rename province column
+  female_participation_list[[i]] <- female_participation_list[[i]] %>%
+    arrange(desc(Participation_Rate)) %>%
+    mutate(Province = province_dict[as.character(Province)]) %>%
+    mutate(Year = 1397 + i - 1) %>%
+    mutate(Participation_Rate = round(Participation_Rate * 100, 1)) %>%
+    rename(Participation = Participation_Rate)  # Rename Participation_Rate column
+  
+  # Assign sorted data back to original variables
+  assign(paste0("male_participation_", 1397 + i - 1), male_participation_list[[i]])
+  assign(paste0("female_participation_", 1397 + i - 1), female_participation_list[[i]])
+}
+```
+
+#### Printing:
+
+The top row (highest participation rate) and bottom row (lowest participation rate) for males and females are printed for the year 1397.
+
+```{r}
+# Print top row for males in 1397
+knitr::kable(head(male_participation_1397, 1), align = "lcc", caption = "Top Province for Males 1397", row.names = FALSE)
+```
+
+```{r}
+# Print bottom row for males in 1397
+knitr::kable(tail(male_participation_1397, 1), align = "lcc", caption = "Bottom Province for Males 1397", row.names = FALSE)
+```
+
+```{r}
+knitr::kable(head(female_participation_1397, 1), align = "lcc", caption = "Top Province for Females 1397", row.names = FALSE)
+```
+
+```{r}
+knitr::kable(tail(female_participation_1397, 1), align = "lcc", caption = "Bottom Province for Females 1397", row.names = FALSE)
+```
+
+## Plot the participation rates for both genders through these years, illustrating any trends or
+
+disparities.
+
+### Calculate and Plot for Males
+
+#### Data Preparation:
+
+-   **Dataframe Collection**: Created a list ('male_participation_list') containing male participation dataframes for each year (1397 to 1401).
+
+```{r}
+# Define a list to store male participation dataframes for each year
+male_participation_list <- list(male_participation_1397, male_participation_1398, male_participation_1399, male_participation_1400, male_participation_1401)
+```
+
+-   **Conversion and Sorting**: Converted and sorted dataframes based on Province name alphabetically.
+
+```{r}
+# Convert all dataframes to data frame format and sort based on Province name alphabetically
+for (i in seq_along(male_participation_list)) {
+  # Convert the dataframe to a data frame format
+  male_participation_list[[i]] <- as.data.frame(lapply(male_participation_list[[i]], unlist))
+  # Sort the dataframe based on Province name alphabetically
+  male_participation_list[[i]] <- male_participation_list[[i]][order(male_participation_list[[i]]$Province), ]
+}
+```
+
+-   **Column Renaming**: Renamed participation rate columns in each dataframe to match respective year labels.
+
+```{r}
+# Rename participation rate columns in each dataframe
+for (i in seq_along(male_participation_list)) {
+  # Rename the participation rate column to include the corresponding year
+  names(male_participation_list[[i]])[names(male_participation_list[[i]]) == "Participation"] <- paste0("Participation_", 1397 + i)
+}
+```
+
+-   **Merging Dataframes**: Combined participation columns into a single dataframe (`male_merged_participation`).
+
+```{r}
+# Merge participation columns from old dataframes based on provinces
+male_merged_participation <- male_participation_list[[1]]
+for (i in 2:length(male_participation_list)) {
+  # Merge the participation columns with the merged dataframe based on Province
+  male_merged_participation <- merge(male_merged_participation, male_participation_list[[i]][, -1], by = "Province", all = TRUE)
+}
+```
+
+-   **Provincial Filtering**: Selected specific provinces(Top, Bottom, and National average).
+
+```{r}
+# Filter provinces Iran, Kurdistan, Sistan and Baluchestan
+male_filtered_participation <- subset(male_merged_participation, Province %in% c("Iran", "Kurdistan", "Sistan and Baluchestan"))
+```
+
+-   **Column Dropping**: Removed the `Year` column for consistency.
+
+```{r}
+# Drop the 'Year' column from the dataframe
+male_filtered_participation <- subset(male_filtered_participation, select = -Year)
+```
+
+-   **Printing the Result**: Finally, We will Print the resulted dataframe.
+
+```{r}
+# Print the filtered dataframe
+knitr::kable(male_filtered_participation, align = "lcccccc", caption = "Top, Bottom, and National Average of Male Participation Rates Over Time", row.names = FALSE)
+```
+
+#### Data Visualization:
+
+-   **Dataframe Melting**: Transformed the dataframe into long format suitable for plotting.
+
+```{r}
+# Melt the dataframe to long format for plotting
+melted_data <- reshape2::melt(male_filtered_participation, id.vars = "Province")
+```
+
+-   **Plotting**: Generated a line plot illustrating participation rates over time for selected provinces, with distinct colors for each province.
+
+```{r}
+# Plot participation rates over time for selected provinces
+ggplot(melted_data, aes(x = variable, y = value, color = Province, group = Province)) +
+  geom_line(size = 1.5) + 
+  labs(x = "Year", y = "Participation Rate",
+       title = "Male Participation Rates Over Time for Selected Provinces",
+        caption = "Source: Iran's LFS Data 1397-1401") +  
+  theme_minimal() +
+   theme(legend.position = "bottom",
+        plot.title = element_text(hjust = 0.5),      # Center-align the title 
+        plot.caption = element_text(hjust = 0.5)) +  # Center-align the caption
+  scale_color_manual(values = rainbow(length(unique(melted_data$Province))))
+```
+
+### Calculate and Plot for Females
+
+#### Data Preparation:
+
+-   **Dataframe Collection**: Created a list ('female_participation_list') containing female participation dataframes for each year (1397 to 1401).
+
+```{r}
+# Define a list to store female participation dataframes for each year
+female_participation_list <- list(female_participation_1397, female_participation_1398, female_participation_1399, female_participation_1400, female_participation_1401)
+```
+
+-   **Conversion and Sorting**: Converted and sorted dataframes based on Province name alphabetically.
+
+```{r}
+# Convert all dataframes to data frame format and sort based on Province name alphabetically
+for (i in seq_along(female_participation_list)) {
+  female_participation_list[[i]] <- as.data.frame(lapply(female_participation_list[[i]], unlist))
+  female_participation_list[[i]] <- female_participation_list[[i]][order(female_participation_list[[i]]$Province), ]
+}
+```
+
+-   **Column Renaming**: Renamed participation rate columns in each dataframe to match respective year labels.
+
+```{r}
+# Rename participation rate columns in each dataframe
+for (i in seq_along(female_participation_list)) {
+  # Rename the participation rate column to include the corresponding year
+  names(female_participation_list[[i]])[names(female_participation_list[[i]]) == "Participation"] <- paste0("Participation_", 1397 + i)
+}
+```
+
+-   **Merging Dataframes**: Combined participation columns into a single dataframe (`female_merged_participation`).
+
+```{r}
+# Merge participation columns from old dataframes based on provinces
+female_merged_participation <- female_participation_list[[1]]
+for (i in 2:length(female_participation_list)) {
+  # Merge the participation columns with the merged dataframe based on Province
+  female_merged_participation <- merge(female_merged_participation, female_participation_list[[i]][, -1], by = "Province", all = TRUE)
+}
+```
+
+-   **Provincial Filtering**: Selected specific provinces(Top, Bottom, and National average).
+
+```{r}
+# Filter provinces Iran, North Khorasan, Markazi
+female_filtered_participation <- subset(female_merged_participation, Province %in% c("Iran", "North Khorasan", "Markazi"))
+```
+
+-   **Column Dropping**: Removed the `Year` column for consistency.
+
+```{r}
+# Drop the 'Year' column from the dataframe
+female_filtered_participation <- subset(female_filtered_participation, select = -Year)
+```
+
+-   **Printing the Result**: Finally, We will Print the resulted dataframe.
+
+```{r}
+# Print the filtered dataframe
+knitr::kable(female_filtered_participation, align = "lcccccc", caption = "Top, Bottom. and National Average of Female Participation Rates Over Time", row.names = FALSE)
+```
+
+#### Data Visualization:
+
+-   **Dataframe Melting**: Transformed the dataframe into long format suitable for plotting.
+
+```{r}
+# Melt the dataframe to long format for plotting
+melted_data <- reshape2::melt(female_filtered_participation, id.vars = "Province")
+```
+
+-   **Plotting**: Generate a line plot showing participation rates over time for selected provinces, with distinct colors for each province.
+
+```{r}
+# Plot participation rates over time for selected provinces
+ggplot(melted_data, aes(x = variable, y = value, color = Province, group = Province)) +
+  geom_line(size = 1.5) + 
+  labs(x = "Year", y = "Participation Rate", 
+       title = "Male Participation Rates Over Time for Selected Provinces",
+       caption = "Source: Iran's LFS Data 1397-1401") +  # Adding caption with source
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        plot.title = element_text(hjust = 0.5),  # Center-align the title
+        plot.caption = element_text(hjust = 0.5)) +  # Center-align the caption
+  scale_color_manual(values = rainbow(length(unique(melted_data$Province))))
+
+```
+
+### Remove Useless Datasets:
+
+In this part, we will remove datasets which are no longer needed.
+
+```{r}
+# Remove useless datasets
+rm(male_participation_list, female_participation_list, male_filtered_participation, male_participation_1397, male_participation_1398, male_participation_1399, male_participation_1400, male_participation_1401, female_filtered_participation, female_participation_1397, female_participation_1398, female_participation_1399, female_participation_1400, female_participation_1401, male_merged_participation, female_merged_participation, participation_rates, participation_rates_sorted, LFS1397_above15_province, LFS1398_above15_province, LFS1399_above15_province, LFS1400_above15_province, LFS1401_above15_province)
+```
+
+# 3. Sectoral Employment and Work Hours.
+
+## Determine the female and male share in the three sectors asked in LFS.
+
+### Clean and Process Employment Role
+
+#### Define Dictionary for Employment Roles
+
+In this section, a dictionary named `employment_role_dict` is defined which maps numeric codes representing employment roles to their corresponding descriptive labels.
+
+```{r}
+# Define the dictionary
+employment_role_dict <- c("01" = "Employers",
+                          "02" = "Independent and Family Workers",
+                          "03" = "Independent and Family Workers",
+                          "04" = "Wage and Salary Earners",
+                          "05" = "Wage and Salary Earners",
+                          "06" = "Wage and Salary Earners",
+                          "07" = "Interns",
+                          "08" = "Interns",
+                          "09" = "Interns",
+                          "10" = "Interns")
+```
+
+#### Clean Employment Role Data for Male and Female Datasets
+
+In the following block, I have written a for loop which does this steps:
+
+-   **Looping Through Years**: We iterate over each year from 1397 to 1401 using a for loop.
+
+-   **Dataset Retrieval**: For each year, we retrieve the male and female datasets using `get()` function.
+
+-   **Data Cleaning for Males**: We drop null values from the "Employment Role" column and replace the values using the dictionary for males.
+
+-   **Data Cleaning for Females**: Similarly, we drop null values from the "Employment Role" column and replace the values using the dictionary for females.
+
+-   **Assigning Modified Datasets**: We assign the processed datasets to new dataframes.
+
+```{r}
+# Clean and Process Employment Role Data for Males and Females
+# Loop through each year
+for (year in c(1397, 1398, 1399, 1400, 1401)) {
+  # Get male and female datasets for the current year
+  male_data_year <- get(paste0("male_data_", year))
+  female_data_year <- get(paste0("female_data_", year))
+  
+  # Drop rows with null values and replace values using the dictionary for males
+  male_Role_Processed <- male_data_year
+  male_Role_Processed$`Employment Role` <- employment_role_dict[as.character(male_Role_Processed$`Employment Role`)]
+  male_Role_Processed <- male_Role_Processed[!is.na(male_Role_Processed$`Employment Role`), ]
+  
+
+  # Drop rows with null values and replace values using the dictionary for females
+  female_Role_Processed <- female_data_year
+  female_Role_Processed$`Employment Role` <- employment_role_dict[as.character(female_Role_Processed$`Employment Role`)]
+  female_Role_Processed <- female_Role_Processed[!is.na(female_Role_Processed$`Employment Role`), ]
+  
+  # Assign the modified datasets to new dataframes with appropriate names
+  assign(paste0("male_Role_Processed_", year), male_Role_Processed)
+  assign(paste0("female_Role_Processed_", year), female_Role_Processed)
+}
+```
+
+### **Remove Useless Datasets:**
+
+In this part, we will remove datasets which are no longer needed.
+
+```{r}
+# Remove useless datasets
+rm(male_Role_Processed, female_Role_Processed, male_data_year, female_data_year)
+```
+
+### Determining Male and Female Share in Each Sector
+
+In the following block, I have written a for loop which does the following steps:
+
+-   **Iteration Over Years**: The outer loop iterates over each year from 1397 to 1401.
+
+-   **Iteration Over Employment Roles**: The inner loop iterates over each unique employment role category.
+
+-   **Data Retrieval**: For each year and employment role, the processed male and female datasets are retrieved.
+
+-   **Calculation of Sums**: The sums of weights for males and females for the current employment role category and year are calculated.
+
+-   **Calculation of Shares**: The share of each gender for the current employment role category is calculated as a percentage, rounded to 2 decimal places.
+
+-   **Storage of Results**:
+
+    -   The results are stored in a list for each year.
+    -   Each element of the list contains a dataframe with sector-gender shares for that year.
+
+-   **Assignment to Unique Dataframe**: The results for each year are assigned to unique dataframe variables using the `assign()` function.
+
+-   **Displaying the Results**: For each year, the results are displayed using the specified style with the `knitr::kable()` function.
+
+```{r}
+# Initialize an empty list to store the results
+sector_gender_share_list <- list()
+
+# Iterate over each year
+for (year in c(1397, 1398, 1399, 1400, 1401)) {
+  
+  # Initialize a list to store the results for the current year
+  year_results <- list()
+  
+  # Iterate over each employment role category
+  for (role in unique(employment_role_dict)) {
+    
+    # Get processed male and female datasets for the current year and role
+    male_data_year <- get(paste0("male_Role_Processed_", year))
+    female_data_year <- get(paste0("female_Role_Processed_", year))
+    
+    # Calculate the sum of weights for males and females for the current role and year
+    sum_male <- sum(male_data_year$Weight[male_data_year$`Employment Role` == role])
+    sum_female <- sum(female_data_year$Weight[female_data_year$`Employment Role` == role])
+    
+    # Calculate the total sum of weights for both genders
+    total_sum <- sum_male + sum_female
+    
+    # Calculate the share of each gender for the current employment role category
+    share_male <- round(sum_male / total_sum * 100, 2)
+    share_female <- round(sum_female / total_sum * 100, 2)
+    
+    # Store the results in a data frame
+    year_results[[role]] <- data.frame(Sector = role,
+                                       Male_Share = share_male,
+                                       Female_Share = share_female)
+  }
+  
+  # Combine all sector-gender shares for the current year into one data frame
+  year_results_df <- do.call(rbind, year_results)
+  
+  # Assign the results for the current year to a unique dataframe variable
+  assign(paste0("sector_gender_share_", year), year_results_df)
+  
+  # Append the results for the current year to the list
+  sector_gender_share_list[[year]] <- year_results_df
+  
+  # Show the results for the current year
+  print(knitr::kable(year_results_df, align = "lcc", caption = paste("Share of Gender in Each Sector at", year), row.names = FALSE), "\n\n")
+}
+```
+
+## Find the average hours worked by each gender in these sectors.
+
+In the following block, I have written a for loop which does the following steps: \* **Iteration Over Years**: The outer loop iterates over each year from 1397 to 1401.
+
+-   **Iteration Over Employment Roles**: The inner loop iterates over each unique employment role category.
+
+-   **Data Retrieval**: For each year and employment role, the processed male and female datasets are retrieved.
+
+-   **Conversion of "Work H/Week" to Numeric**: The "Work H/Week" column is converted to numeric using `as.numeric()` function.
+
+-   **Calculation of Weighted Average Hours**: The weighted average hours worked per week for males and females within each sector are calculated using the `weighted.mean()` function, with the "Weight" column used as weights.
+
+-   **Storage of Results**:
+
+    -   The results are stored in a list for each year.
+    -   Each element of the list contains a dataframe with sector-gender average hours worked for that year.
+
+-   **Assignment to Unique Dataframe**: The results for each year are assigned to unique dataframe variables using the `assign()` function.
+
+-   **Displaying the Results**: For each year, the results are displayed using the specified style with the `knitr::kable()` function.
+
+```{r}
+# Initialize an empty list to store the results
+avg_hours_worked_list <- list()
+
+# Create an empty list to store the average hours worked for each gender
+avg_hours_list <- list()
+
+# Iterate over each year
+for (year in c(1397, 1398, 1399, 1400, 1401)) {
+  
+  # Initialize a list to store the results for the current year
+  year_results <- list()
+  
+  # Iterate over each employment role category
+  for (role in unique(employment_role_dict)) {
+    
+    # Get processed male and female datasets for the current year and role
+    male_data_year <- get(paste0("male_Role_Processed_", year))
+    female_data_year <- get(paste0("female_Role_Processed_", year))
+    
+    # Convert "Work H/Week" column to numeric
+    male_data_year$`Work H/Week` <- as.numeric(male_data_year$`Work H/Week`)
+    female_data_year$`Work H/Week` <- as.numeric(female_data_year$`Work H/Week`)
+    
+    # Calculate the weighted average hours worked per week for males and females for the current role and year
+    avg_hours_male <- round(weighted.mean(male_data_year$`Work H/Week`[male_data_year$`Employment Role` == role], 
+                                          w = male_data_year$Weight[male_data_year$`Employment Role` == role], na.rm = TRUE), 2)
+    avg_hours_female <- round(weighted.mean(female_data_year$`Work H/Week`[female_data_year$`Employment Role` == role], 
+                                            w = female_data_year$Weight[female_data_year$`Employment Role` == role], na.rm = TRUE), 2)
+    
+    # Store the results in a data frame
+    year_results[[role]] <- data.frame(Sector = role,
+                                       Avg_Hours_Male = avg_hours_male,
+                                       Avg_Hours_Female = avg_hours_female)
+  }
+  
+  # Combine all sector-gender average hours for the current year into one data frame
+  year_results_df <- do.call(rbind, year_results)
+  
+  # Assign the results for the current year to a unique dataframe variable
+  assign(paste0("avg_hours_worked_", year), year_results_df)
+  
+  # Append the results for the current year to the list
+  avg_hours_worked_list[[year]] <- year_results_df
+  
+    # Store the average hours worked for the current year
+  avg_hours_list[[year]] <- data.frame(Year = year, Gender = c("Male", "Female"), Average_Hours = c(avg_hours_male, avg_hours_female))
+  
+  # Show the results for the current year
+  print(knitr::kable(year_results_df, align = "lcc", caption = paste("Share of Gender in Each Sector at", year), row.names = FALSE))
+}
+```
+
+## Plot the average hours worked alongside the gender share for each sector from 1397 to 1401.
+
+### Average Hours Worked
+
+#### **Dataset Merging and Transformation**:
+
+-   **Dataset Retrieval**: Iterate over each dataset from 1397 to 1401.
+
+-   **Year Extraction**: Extract the year from the dataset name.
+
+-   **Melt Operation**: Convert the dataset from wide to long format using `melt()` function from the `reshape2` package.
+
+-   **Binary Variable Creation**: Create a binary variable indicating male or female based on the variable names.
+
+-   **Column Renaming**: Modify the variable names to remove "\_Male" or "\_Female".
+
+-   **Year Column Addition**: Add a column indicating the year of the dataset.
+
+-   **List Appending**: Append the transformed dataset to a list.
+
+-   **Merging Datasets**: Use `do.call()` with `rbind()` to merge all datasets into one.
+
+```{r}
+# List of dataset names
+dataset_names <- c("avg_hours_worked_1397", "avg_hours_worked_1398", "avg_hours_worked_1399", "avg_hours_worked_1400", "avg_hours_worked_1401")
+
+# Initialize an empty list to store the merged datasets
+merged_datasets <- list()
+
+# Iterate over each dataset
+for (name in dataset_names) {
+  # Extract the year from the dataset name
+  year <- substr(name, nchar(name) - 3, nchar(name))
+  
+  # Get the dataset
+  df <- get(name)
+  
+  # Melt the dataset to long format
+  melted_df <- reshape2::melt(df, id.vars = "Sector")
+  
+  # Create a binary variable for male and female
+  melted_df$Sex <- ifelse(grepl("Male", melted_df$variable), "Male", "Female")
+  
+  # Remove "Male" or "Female" from the variable names
+  melted_df$variable <- gsub("_Male|_Female", "", melted_df$variable)
+  
+  # Add a column for the year
+  melted_df$Year <- as.numeric(year)
+  
+  # Append the dataset to the list of merged datasets
+  merged_datasets[[year]] <- melted_df
+}
+
+# Merge all datasets into one
+avg_hours_merged <- do.call(rbind, merged_datasets)
+```
+
+#### **Plotting the Trend**:
+
+The graph shows different colors for males and females, with each sector displayed in separate panels for clarity. The title and caption are centered, and a simple theme is applied to the graph. The legend is placed at the bottom to enhance visualization.
+
+```{r}
+# Plot the trend for each sector with center-aligned title and caption
+ggplot(avg_hours_merged, aes(x = Year, y = value, color = Sex)) +
+  geom_line(size = 1) +
+  facet_wrap(~ Sector, scales = "free_y") +
+  labs(title = "Trend of Average Hours Worked by Gender in Each Sector",
+       x = "Year",
+       y = "Average Hours Worked",
+       color = "Gender",
+       caption = "Source: Iran's LFS Data 1397-1401") +
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        plot.title = element_text(hjust = 0.5),      # Center-align the title
+        plot.caption = element_text(hjust = 0.5))    # Center-align the caption
+
+```
+
+### Sector Gender Share
+
+#### **Data Preprocessing:**
+
+-   First, we rename columns in each dataframe representing gender shares for the years 1397 to 1401. We assign new names "Male" and "Female" to the columns originally named "Male_Share" and "Female_Share" in each dataset.
+-   Next, we initialize an empty list to store the merged datasets. We iterate over each dataset to extract the year from its name, melt the dataset to long format, rename columns for clarity, add a column for the year, and append the dataset to the list of merged datasets.
+
+```{r}
+# Rename columns in each dataframe
+for (i in 1397:1401) {
+  assign(paste0("sector_gender_share_", i), get(paste0("sector_gender_share_", i)) %>%
+           rename(Male = Male_Share, Female = Female_Share))
+}
+
+
+# List of dataset names
+dataset_names <- c("sector_gender_share_1397", "sector_gender_share_1398", "sector_gender_share_1399", "sector_gender_share_1400", "sector_gender_share_1401")
+
+# Initialize an empty list to store the merged datasets
+merged_datasets <- list()
+
+# Iterate over each dataset
+for (name in dataset_names) {
+  # Extract the year from the dataset name
+  year <- as.numeric(str_extract(name, "[0-9]+"))
+  
+  # Get the dataset
+  df <- get(name)
+  
+  # Melt the dataset to long format
+  melted_df <- reshape2::melt(df, id.vars = "Sector")
+  
+  # Rename columns for clarity
+  colnames(melted_df) <- c("Sector", "Gender", "Share")
+  
+  # Add a column for the year
+  melted_df$Year <- year
+  
+  # Append the dataset to the list of merged datasets
+  merged_datasets[[year]] <- melted_df
+}
+```
+
+#### **Data Merging:**
+
+-   After merging all datasets into one using `do.call(rbind, merged_datasets)`, we reverse the order of levels for the "Gender" variable, ensuring "Female" is plotted before "Male" in the legend and colors.
+
+```{r}
+# Merge all datasets into one
+gender_share_merged <- do.call(rbind, merged_datasets)
+
+# Reverse the order of levels for the "Gender" variable
+gender_share_merged <- gender_share_merged %>%
+  mutate(Gender = factor(Gender, levels = c("Female", "Male")))
+```
+
+#### **Plotting the Trend**:
+
+-   Finally, we plot the trend for each sector, facet-wrapped by sector, with center-aligned title and caption. We use ggplot2 for visualization and set aesthetics for the x-axis, y-axis, color (representing gender), title, and caption. The plot is themed with minimal design, and both the title and caption are center-aligned.
+
+```{r}
+# Plot the trend for each sector with center-aligned title and caption
+ggplot(gender_share_merged, aes(x = Year, y = Share, color = Gender)) +
+  geom_line(size = 1) +
+  facet_wrap(~ Sector, scales = "free_y") +
+  labs(title = "Trend of Gender Share in Each Sector (1397-1401)",
+       x = "Year",
+       y = "Gender Share",
+       color = "Gender",
+       caption = "Source: Data from 1397 to 1401") +
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        plot.title = element_text(hjust = 0.5),      # Center-align the title
+        plot.caption = element_text(hjust = 0.5))    # Center-align the caption
+
+```
+
+### Remove Useless Datasets:
+
+In this part, we will remove datasets which are no longer needed.
+
+```{r}
+# Remove useless datasets
+rm(male_data_1397, male_data_1398, male_data_1399, male_data_1401, female_data_1397, female_data_1398, female_data_1399, female_data_1401, female_Role_Processed_1397, female_Role_Processed_1398, female_Role_Processed_1399, female_Role_Processed_1400, female_Role_Processed_1401, male_Role_Processed_1397, male_Role_Processed_1398, male_Role_Processed_1399, male_Role_Processed_1400, male_Role_Processed_1401)
+```
+
+# 4. Reasons for Job Leave.
+
+## Analyze the dataset to extract the top reasons for job leave among males and females in
+
+the year 1400 and plot the results.
+
+### Define the Dictionary:
+
+-   A dictionary (`job_leave_dict`) is defined with codes as keys and corresponding job leave reasons as values.
+
+```{r}
+# Define the dictionary
+job_leave_dict <- c("01" = "Low Income",
+                    "02" = "Permanent Workplace Closure",
+                    "03" = "Seasonal Employment",
+                    "04" = "Temporary Employment",
+                    "05" = "Job Relocation",
+                    "06" = "Education or Training",
+                    "07" = "Layoff",
+                    "08" = "Family Issues",
+                    "09" = "Migration",
+                    "10" = "Retirement",
+                    "11" = "Completion of Military Service",
+                    "12" = "Elderliness",
+                    "13" = "Illness",
+                    "14" = "Other")
+```
+
+### Updating Job Leave Column and Filtering Datasets (1400)
+
+-   **Update Job Leave Column:** Loop through the year 1400, retrieve the male and female datasets for that year, and apply the dictionary to the Job Leave column for both datasets, replacing codes with descriptive reasons. Convert values not found in the dictionary to `NA`.
+
+-   **Remove Rows with Null Job Leave Values:** Drop rows with `NA` values in the Job Leave column for both male and female datasets.
+
+-   **Assign New Datasets**: Assign the updated datasets to new variables with appropriate names (`male_job_leave_1400` and `female_job_leave_1400`).
+
+```{r}
+# Create new datasets for males and females with updated Job Leave column
+for (year in 1400:1400) {
+  # Get male and female datasets for the current year
+  male_data <- get(paste0("male_data_", year))
+  female_data <- get(paste0("female_data_", year))
+  
+  # Apply the dictionary to the Job Leave column
+  male_data$`Job Leave` <- ifelse(male_data$`Job Leave` %in% names(job_leave_dict), job_leave_dict[male_data$`Job Leave`], NA)
+  female_data$`Job Leave` <- ifelse(female_data$`Job Leave` %in% names(job_leave_dict), job_leave_dict[female_data$`Job Leave`], NA)
+  
+  # Drop rows with NA values in Job Leave column
+  male_data <- male_data[!is.na(male_data$`Job Leave`), ]
+  female_data <- female_data[!is.na(female_data$`Job Leave`), ]
+  
+  # Assign new datasets with appropriate names
+  assign(paste0("male_job_leave_", year), male_data)
+  assign(paste0("female_job_leave_", year), female_data)
+}
+```
+
+### Aggregate Reasons Function
+
+-   Calculates weighted percentages of job leave reasons.
+
+-   Groups data by reasons, computes weighted percentages, and aggregates reasons below 2% into "Other" category.
+
+-   Produces sorted dataframe of aggregated reasons.
+
+```{r}
+# Function to aggregate reasons with weighted percentages less than 2% into "Other" category
+aggregate_reasons <- function(df) {
+  # Calculate the total weight
+  total_weight <- sum(df$Weight)
+  
+  # define threshold
+  threshold <- 1.5
+
+  # Calculate the weighted percentage for each reason
+  df <- df %>%
+    group_by(`Job Leave`) %>%
+    summarize(Weighted_Percent = sum(Weight) / total_weight * 100) %>%
+    mutate(`Job Leave` = ifelse(Weighted_Percent < threshold, "Other", `Job Leave`)) %>%
+    group_by(`Job Leave`) %>%
+    summarize(Weighted_Percent = sum(Weighted_Percent)) %>%
+    arrange(desc(Weighted_Percent))
+  
+  return(df)
+}
+```
+
+### Aggregate Reasons for Females and Males
+
+-   Applies aggregation function to female and male job leave datasets for 1400.
+
+-   Results in dataframes of top reasons and an "Other" category.
+
+```{r}
+# Aggregate reasons for female job leave in 1400
+female_job_leave_1400_aggregated <- aggregate_reasons(female_job_leave_1400)
+
+# Aggregate reasons for male job leave in 1400
+male_job_leave_1400_aggregated <- aggregate_reasons(male_job_leave_1400)
+```
+
+### Plotting Pie Charts
+
+-   Utilizes ggplot2 to visualize aggregated job leave reasons for females and males in 1400.
+
+-   Titles are centered, legends are positioned to the right, and captions provide data source information.
+
+```{r}
+# Plot pie chart for male job leave reasons in 1400
+ggplot(male_job_leave_1400_aggregated, aes(x = "", y = Weighted_Percent, fill = `Job Leave`)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar(theta = "y") +
+  labs(title = "Job Leave Reasons for Males (1400)",
+       fill = "Job Leave Reason",
+       caption = "Source: Iran's LFS Data 1400") +
+  theme_void() +
+  theme(legend.position = "right",
+        plot.title = element_text(hjust = 0.5))  # Center-align the title
+```
+
+```{r}
+# Plot pie chart for female job leave reasons in 1400
+ggplot(female_job_leave_1400_aggregated, aes(x = "", y = Weighted_Percent, fill = `Job Leave`)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar(theta = "y") +
+  labs(title = "Job Leave Reasons for Females (1400)",
+       fill = "Job Leave Reason",
+       caption = "Source: Iran's LFS Data 1400") +
+  theme_void() +
+  theme(legend.position = "right",
+        plot.title = element_text(hjust = 0.5))  # Center-align the title
+```
+
+## Analyze the dataset to extract the top reasons for job leave among single and married females in the year 1400 and plot the results.
+
+### Split the Dataset:
+
+-   We updated the values in the "Marriage" column of the `female_job_leave_1400` dataset. Individuals with a value of 1 in the "Marriage" column are assigned the label "Married", while others are assigned the label "Single".
+
+```{r}
+# Update values in the "Marriage" column
+female_job_leave_1400$Marriage <- ifelse(female_job_leave_1400$Marriage == 1, "Married", "Single")
+```
+
+-   Then, we split the dataset into two separate datasets based on the "Marriage" column. The `single_females_1400` dataset contains records of females who are single, while the `married_females_1400` dataset contains records of females who are married.
+
+-   After that, we aggregate the job leave reasons for each group separately, by calculating the weighted percentage of each job leave reason within each group.
+
+```{r}
+# Split the dataset into two separate datasets based on the "Marriage" column
+single_females_1400 <- female_job_leave_1400[female_job_leave_1400$Marriage != "Married", ]
+married_females_1400 <- female_job_leave_1400[female_job_leave_1400$Marriage == "Married", ]
+
+# Aggregate job leave reasons for single and married females separately
+female_job_leave_1400_single <- aggregate_reasons(single_females_1400)
+female_job_leave_1400_married <- aggregate_reasons(married_females_1400)
+```
+
+### Plotting Pie Charts:
+
+Finally, we plotted pie charts to visualize the top reasons for job leave among single and married females in 1400.
+
+```{r}
+# Plot pie chart for female job leave reasons in 1400
+ggplot(female_job_leave_1400_single, aes(x = "", y = Weighted_Percent, fill = `Job Leave`)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar(theta = "y") +
+  labs(title = "Job Leave Reasons for Single Females (1400)",
+       fill = "Job Leave Reason",
+       caption = "Source: Iran's LFS Data 1400") +
+  theme_void() +
+  theme(legend.position = "right",
+        plot.title = element_text(hjust = 0.5))  # Center-align the title
+```
+
+```{r}
+# Plot pie chart for female job leave reasons in 1400
+ggplot(female_job_leave_1400_married, aes(x = "", y = Weighted_Percent, fill = `Job Leave`)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar(theta = "y") +
+  labs(title = "Job Leave Reasons for Married Females (1400)",
+       fill = "Job Leave Reason",
+       caption = "Source: Iran's LFS Data 1400") +
+  theme_void() +
+  theme(legend.position = "right",
+        plot.title = element_text(hjust = 0.5))  # Center-align the title
+```
+
+# 5. Gender Gap Analysis.
+
+## Discuss potential reasons for the gender gap in workforce participation between male and female workers.
+
+### **Family Issues**:
+
+**Married women** often leave their jobs due to family issues. However, this factor has less impact on **single women** and even less on **men**.
+
+### **Low Income**:
+
+Women have the choice not to work if they prefer. The chart illustrates that **low income** is a significant reason for women leaving their jobs. In contrast, men often feel compelled to provide for their families and may accept low-paid positions.
+
+Additionally, some of the income disparity may result from **wage discrimination** between men and women.
+
+### **Masculine Workspaces**:
+
+The data shows that **men dominate** the labor force in Iran. Consequently, workspaces may be perceived as **less welcoming** for women.

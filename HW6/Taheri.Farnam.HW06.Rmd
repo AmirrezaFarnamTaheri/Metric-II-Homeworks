@@ -1,0 +1,450 @@
+---
+title: "Metrics II - Homework 6"
+author: "Farnam Taheri"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    theme: readable
+    highlight: kate
+    toc: true
+    toc_depth: 4
+    toc_float: true
+    df_print: paged
+    code_folding: hide
+    css: styles.css
+    includes:
+      before_body: navbar.html
+editor_options:
+  markdown:
+    wrap: 72
+---
+
+{r setup, warning=FALSE, message=FALSE}
+# Setup chunk to load required packages and set global options
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(cache = TRUE)
+
+# Load necessary libraries
+library(DT)          # Table display
+library(lubridate)   # Date handling
+library(dplyr)       # Data manipulation
+library(ggplot2)     # Data visualization
+library(plm)         # Panel data models
+library(lmtest)      # Diagnostic tests for linear models
+library(sandwich)    # Robust standard errors
+library(stargazer)   # To create regression tables
+library(plotly)      # Interactive visulization
+library(lme4)
+
+Part I: The COVID-19 Pandemic and the Effectiveness of Lockdown
+
+Consider the following model: $$covid\_cases_{it} = β_0 + β_1 stringency\_index_{it} + ϵ_{it} (1)$$ where the variable $covid_cases_{it}$ measures pandemic situation in the $i$-th country, $t$ is the time period, $stringency\_index_{it}$ is the so-called stringency index and it measures policy responses that governments have taken to react the COVID-19 pandemic (higher value is related to a larger number of policies or stricter policies) and $ϵ_{it}$ is the error term.
+
+Preliminaries
+
+Define the Required Functions
+
+{r}
+hausman_test <- function(fe_model, re_model) {
+  # Conduct the Hausman test
+  hausman_test <- phtest(fe_model, re_model)
+  
+  # Round the p-value to four digits
+  rounded_p_value <- round(hausman_test$p.value, 4)
+  
+  # Determine interpretation based on the p-value
+  if (hausman_test$p.value < 0.05) {
+    interpretation <- paste(
+      "The Hausman test indicates a significant difference between the fixed effects (FE) and random effects (RE) models (p-value =",
+      rounded_p_value, 
+      "). Given the low p-value (< 0.05), we reject the null hypothesis that the RE model is consistent. This suggests that the FE model is preferred, implying that there are likely unobserved time-invariant variables correlated with the explanatory variables. These unobserved variables may introduce bias in the RE model, making the FE model a more reliable choice for our analysis."
+    )
+  } else {
+    interpretation <- paste(
+      "The Hausman test shows no significant difference between the fixed effects (FE) and random effects (RE) models (p-value =",
+      rounded_p_value,
+      "). With a p-value greater than 0.05, we fail to reject the null hypothesis, indicating that the RE model is not inconsistent. This suggests that either the FE or RE model could be used. However, if there are concerns about unobserved time-invariant variables correlating with the explanatory variables, the FE model might still be preferred to avoid potential biases."
+    )
+  }
+  
+  # HTML output
+  cat("<p><strong><center>Hausman Test Results</center></strong></p>",
+      "<p><strong>P-value:</strong>", rounded_p_value,
+      "<br><strong>Interpretation:</strong>", interpretation, "</p>")
+}
+
+{r}
+#' Generate an Interactive Table Using DT
+#'
+#' This function generates an interactive table using the DT package.
+#'
+#' @param data A data frame to display.
+#' @param caption The caption for the table (default: NULL).
+#' @param col_names Column names for the table (default: NULL).
+#' @param options List of options for the DT::datatable function (default: list(pageLength = 5, scrollX = TRUE)).
+#' @param row_colors Row colors for the table (default: NULL).
+#' @param note Note to add below the table (default: NULL).
+#' @param footnote Footnote to add below the table (default: NULL).
+#' 
+#' @return Interactive table.
+#' @examples
+#' generate_interactive_table(mtcars, caption = "Car Dataset")
+generate_interactive_table <- function(data, caption = NULL, col_names = NULL,
+                                       options = list(pageLength = 5, scrollX = TRUE),
+                                       row_colors = NULL, note = NULL, footnote = NULL) {
+  if (!is.data.frame(data)) stop("Input data must be a data frame.")
+  
+  table <- datatable(data, caption = htmltools::tags$caption(
+    style = 'caption-side: top; text-align: center;', caption),
+    colnames = col_names, options = options)
+  
+  if (!is.null(row_colors)) {
+    table <- table %>% formatStyle(0, target = 'row', backgroundColor = row_colors)
+  }
+  
+  if (!is.null(note)) {
+    table <- table %>% formatStyle(columns = 1:ncol(data), valueColumns = note, fontSize = '80%')
+  }
+  
+  if (!is.null(footnote)) {
+    table <- table %>% formatStyle(columns = 1:ncol(data), valueColumns = footnote, fontSize = '80%', italic = TRUE)
+  }
+  
+  return(table)
+}
+
+
+Set the working directory
+
+{r message=FALSE, warning=FALSE}
+# Set the working directory to the location of the data files
+setwd("./Data")
+
+# Assign the working directory to a variable for future reference
+working_dir <- getwd()
+
+Load Data
+
+First, we download the latest data related to COVID-19 and the stringency index from the Our World in Data dataset.
+
+{r message=FALSE, warning=FALSE}
+# Read the CSV file from the working directory and Convert to tibble for better readability
+covid_data <- as_tibble(read.csv("./Data/owid-covid-data.csv"))
+
+{r}
+# Convert 'date' column to Date type
+covid_data <- covid_data %>%
+  mutate(date = as.Date(date, format="%Y-%m-%d"))
+
+# Aggregate data by month while retaining additional relevant columns
+covid_data <- covid_data %>%
+  # Create a new column for the month
+  mutate(month = floor_date(date, "month")) %>%
+  # Group by location and month
+  group_by(location, month) %>%
+  # Summarize the data by aggregating relevant columns
+  summarize(
+    new_cases_smoothed = sum(new_cases_smoothed, na.rm = TRUE),
+    new_cases = sum(new_cases, na.rm = TRUE),
+    positive_rate = mean(positive_rate, na.rm = TRUE),
+    tests_per_case = mean(tests_per_case, na.rm = TRUE),
+    total_vaccinations = sum(total_vaccinations, na.rm = TRUE),
+    people_vaccinated = sum(people_vaccinated, na.rm = TRUE),
+    people_fully_vaccinated = sum(people_fully_vaccinated, na.rm = TRUE),
+    total_boosters = sum(total_boosters, na.rm = TRUE),
+    new_vaccinations_smoothed = sum(new_vaccinations_smoothed, na.rm = TRUE),
+    stringency_index = mean(stringency_index, na.rm = TRUE),
+    population = first(population),
+    population_density = first(population_density),
+    median_age = first(median_age),
+    aged_65_older = first(aged_65_older),
+    aged_70_older = first(aged_70_older),
+    gdp_per_capita = first(gdp_per_capita),
+    extreme_poverty = first(extreme_poverty),
+    cardiovasc_death_rate = first(cardiovasc_death_rate),
+    diabetes_prevalence = first(diabetes_prevalence),
+    handwashing_facilities = first(handwashing_facilities),
+    hospital_beds_per_thousand = first(hospital_beds_per_thousand),
+    life_expectancy = first(life_expectancy),
+    human_development_index = first(human_development_index),
+    excess_mortality = sum(excess_mortality, na.rm = TRUE),
+    excess_mortality_cumulative = sum(excess_mortality_cumulative, na.rm = TRUE),
+    excess_mortality_cumulative_absolute = sum(excess_mortality_cumulative_absolute, na.rm = TRUE),
+    excess_mortality_cumulative_per_million = sum(excess_mortality_cumulative_per_million, na.rm = TRUE)
+  ) %>%
+  # Ungroup the data frame
+  ungroup()
+
+# Add a 'month' factor column for fixed effects
+covid_data <- covid_data %>%
+  mutate(month_factor = factor(month(month)))
+
+{r}
+# Display the first few rows of the dataset to understand its structure
+set.seed(42)    # Set seed for reproducibility
+covid_random_rows <- sample_n(covid_data, 250) # Pick 50 random rows from the dataset
+generate_interactive_table(covid_random_rows,
+                           col_names=colnames(covid_random_rows),
+                           row_colors = "aliceblue")
+
+A. Expected Sign of $β_1$
+
+What signs would you expect on the coefficient $β_1$. Why?
+
+The coefficient $β_1$ measures the relationship between the stringency index (policy responses) and the number of COVID-19 cases. We expect $β_1$ to be negative because stricter policies (higher stringency index) should lead to fewer COVID-19 cases. Stricter policies are intended to reduce the spread of the virus by limiting social interactions and mobility. Thus a higher stringency (stricter policies) should ideally lead to fewer cases due to reduced transmission.
+
+B. Choose Proxy Variable
+
+Download the latest data related to the COVID-19 pandemic and the stringency index. You can use the Our World in Data dataset (link to the csv. file, description of variables). Choose proxy variable for $covid\_cases_{it}$ and discuss this choice.
+
+Selecting the right proxy variable for $covid\_cases_{it}$ in Model (1) is crucial for understanding the evolving COVID-19 pandemic. Among available options, the new_cases metric stands out as a reliable choice. It directly reflects the current state of the pandemic in each country at any given time, making it a fundamental indicator of the virus's impact on populations. Integrating new_cases into the model provides timely insights into the pandemic's dynamics, essential for evaluating government responses.
+
+While new_cases is a good choice, comparing it with the new_cases_smoothed variable reveals some nuances. New_cases_smoothed offers benefits like stabilizing volatile data and addressing reporting errors through a 7-day smoothing process. This creates a more consistent trend in COVID-19 cases over time, facilitating comparisons across countries and analyzing the relationship with policy stringency.
+
+However, despite these advantages, the preference leans towards using the raw new_cases metric over new_cases_smoothed. This decision arises from concerns about potential autocorrelation when aggregating smoothed data on a monthly basis. Autocorrelation can bias estimates and inflate errors, especially when data is aggregated more frequently than originally collected. Opting for the raw new_cases metric helps avoid these issues, ensuring the analysis remains accurate and reliable.
+
+In conclusion, while both new_cases and new_cases_smoothed have their merits, the raw new_cases metric is the preferred choice for Model (1).
+
+C. Model Comparison
+
+Estimate the parameter of (1) using pooled regression as well as the RE and FE estimators. Remember about clustered standard errors. Are the estimates of $β_1$ in line with your expectations? Test the heterogeneity in the RE and FE models. Compare RE and FE models with the Hausman test.
+
+Model Estimation
+
+First, we will estimate different models and analyze the models' results.
+
+{r, results=FALSE}
+# Convert data to panel data frame
+  covid_pdata <- pdata.frame(covid_data, index = c("location", "month"))
+  
+  # Estimate the extended model using pooled OLS
+  pooled_model <- plm(
+    formula = new_cases ~ stringency_index,  # Specify the model formula
+    data = covid_pdata,                     # Provide the data
+    model = "pooling"                      # Use the pooling model (Pooled OLS)
+  )
+  
+  # Estimate the extended model using pooled OLS
+  re_model <- plm(
+    formula = new_cases ~ stringency_index,
+    data = covid_pdata,                     
+    model = "random"                      # Use the random effect model 
+  )
+  
+  
+  
+  # Estimate the extended model using pooled OLS
+  fe_model <- plm(
+    formula = new_cases ~ stringency_index,
+    data = covid_pdata,                  
+    model = "within"                      # Use the fixed effect model 
+  )
+  
+# Compute clustered standard errors
+pooled_se <- coeftest(pooled_model,                   # Compute coefficient test
+                  vcov = vcovHC(                      # Using the robust covariance estimator
+                            pooled_model,             # Based on the pooled model
+                            type = "HC1",             # Type of robust covariance estimator
+                            cluster = "group")     # Clustering by country
+                      )
+
+re_se <- coeftest(re_model,
+              vcov = vcovHC(re_model, type = "HC1", cluster = "group")
+                           )
+fe_se <- coeftest(fe_model,
+              vcov = vcovHC(fe_model, type = "HC1", cluster = "group")
+                           )
+
+
+# Display results using stargazer
+stargazer_models <- stargazer( 
+  pooled_model, re_model, fe_model,                                    # Models to display
+  type = "html",                                                       # Output type as HTML
+  title = "<center>COVID-19 Cases and Stringency Index<center>",       # Title for the table
+  dep.var.labels = c("New COVID-19 Cases"),                            # Dependent variable label
+  column.labels = c("Pooled OLS", "Random Effects", "Fixed Effects"),  # Model names for columns
+  
+  covariate.labels = c(              # Labels for covariates
+                       "Constant"="Constant",  
+                       "stringency_index"="Stringency Index",
+                       "population_density"="Population Density",
+                       "median_age"="Median Age",
+                       "month_factor"="Month Factor"), 
+
+  digits = 2,                        # Number of digits to display
+  align = TRUE,                      # Align columns
+  style = "AER",                     # Use AER style
+  intercept.bottom = FALSE,          # Display intercepts at the top
+  intercept.top = TRUE,              # Display intercepts at the bottom
+  se = list(                         # Clustered standard errors
+    pooled_se[, 2], re_se[, 2], fe_se[, 2]
+    ) 
+)
+
+
+{r echo=FALSE, results='asis'}
+cat("<center>",stargazer_models,"<center>")
+
+Result Analysis
+
+Pooled OLS:
+
+The coefficient for the Stringency Index is 1,101.02 and is statistically significant at the 1% level. This indicates a positive relationship between the stringency of COVID-19 measures and the number of new cases. This could suggest that stricter measures might correlate with higher reporting or testing rates.
+
+The F-statistic indicates that the model is significant overall.
+
+Random Effects:
+
+The coefficient for the Stringency Index is 199.48 and is not statistically significant. This suggests that in the RE model, the Stringency Index does not have a significant effect on new COVID-19 cases.
+
+Fixed Effects:
+
+The coefficient for the Stringency Index is -60.24 and is not statistically significant. This suggests that in the FE model, the Stringency Index does not have a significant effect on new COVID-19 cases.
+
+Heterogeneity Test
+
+Now we will perform the Hausman test in oreder tocompare fixed effect and random effect models.
+
+{r, results='asis'}
+# Conducting the Hausman test utilizing the defined function
+hausman_test(fe_model, re_model)
+
+Alternative
+
+{r, results='asis'}
+# Estimate the models using lme4
+pooled_model <- lm(new_cases ~ stringency_index, data = covid_data)
+re_model <- lmer(new_cases ~ stringency_index + (1 | location), data = covid_data)
+fe_model <- lmer(new_cases ~ stringency_index + (1 | location) + (1 | month_factor), data = covid_data)
+
+# Compute clustered standard errors for pooled OLS
+pooled_se <- sqrt(diag(vcovHC(pooled_model, type = "HC1", cluster = "location")))
+
+# Extract random effects coefficients and standard errors
+re_coefs <- summary(re_model)$coefficients
+fe_coefs <- summary(fe_model)$coefficients
+
+# Display results using stargazer
+stargazer(
+  pooled_model, re_model, fe_model,                                    # Models to display
+  type = "html",                                                       # Output type as HTML
+  title = "<center>COVID-19 Cases and Stringency Index<center>",       # Title for the table
+  dep.var.labels = c("New COVID-19 Cases"),                            # Dependent variable label
+  column.labels = c("Pooled OLS", "Random Effects", "Fixed Effects"),  # Model names for columns
+  covariate.labels = c("Stringency Index"),                            # Labels for covariates
+  se = list(pooled_se, re_coefs[, 2], fe_coefs[, 2]),                  # Standard errors for each model
+  digits = 2,                                                          # Number of digits to display
+  align = TRUE,                                                        # Align the columns
+  style = "AER",                                                       # Style of the table
+  intercept.bottom = FALSE,                                            # No intercept at bottom
+  intercept.top = TRUE                                                 # Intercept at top
+)
+
+# Conducting the Hausman test using the defined function (requires plm for Hausman test)
+fe_plm <- plm(new_cases ~ stringency_index, data = pdata.frame(covid_data, index = c("location", "month")), model = "within")
+re_plm <- plm(new_cases ~ stringency_index, data = pdata.frame(covid_data, index = c("location", "month")), model = "random")
+hausman_test(fe_plm, re_plm)
+
+
+D. Models with Control Varialbes
+
+Choose at least two control variables that potentially affect the outcome variable and extend (1) by the selected variables. What sign would you expect on the related coefficients? Estimate the extended regression with pooled regression as well as the RE and FE estimators. Are the estimates of $β_1$ in line with your expectations? Test the heterogeneity in the RE and FE models. Compare RE and FE models with the Hausman test.
+
+Model Estimation
+
+First, we will estimate different models and analyze the models' results.
+
+{r, results=FALSE}
+# Convert data to panel data frame with the new control variables included
+  covid_pdata <- pdata.frame(covid_data, index = c("location", "month"))
+  
+  # Estimate the extended model using pooled OLS
+  pooled_model_extended <- plm(
+    formula = new_cases_smoothed ~ stringency_index + population_density + gdp_per_capita + median_age,  # Specify the model formula
+    data = covid_pdata,                     # Provide the data
+    model = "pooling"                      # Use the pooling model (Pooled OLS)
+  )
+  
+  # Estimate the extended model using pooled OLS
+  re_model_extended <- plm(
+    formula = new_cases_smoothed ~ stringency_index + population_density + gdp_per_capita + median_age,  
+    data = covid_pdata,                     
+    model = "random"                      # Use the random effect model 
+  )
+  
+  # Estimate the extended model using pooled OLS
+  fe_model_extended <- plm(
+    formula = new_cases_smoothed ~ stringency_index + population_density + gdp_per_capita + median_age,
+    data = covid_pdata,                  
+    model = "within"                      # Use the fixed effect model 
+  )
+  
+# Compute clustered standard errors
+pooled_se_extended <- coeftest(pooled_model_extended,
+                           vcov = vcovHC(pooled_model_extended, type = "HC1", cluster = "group")
+)
+re_se_extended <- coeftest(re_model_extended,
+                           vcov = vcovHC(re_model_extended, type = "HC1", cluster = "group")
+                           )
+fe_se_extended <- coeftest(fe_model_extended,
+                           vcov = vcovHC(fe_model_extended, type = "HC1", cluster = "group")
+                           )
+ 
+# Display results using stargazer
+stargazer_models_extended <- stargazer(
+  pooled_model_extended, re_model_extended, fe_model_extended,
+  
+  title = "<center>COVID-19 Cases and Stringency Index<center>", 
+  dep.var.labels = c("New COVID-19 Cases"),
+  column.labels = c("Pooled OLS", "Random Effects", "Fixed Effects"),
+
+  covariate.labels = c("Constant"="Constant",
+                       "stringency_index"="Stringency Index",
+                       "population_density"="Population Density",
+                       "gdp_per_capita"="GDP per Capita",
+                       "median_age"="Median Age",
+                       "month_factor"="Month Factor"), 
+  
+  type = "html", digits = 2, align = TRUE, style = "AER",
+  intercept.bottom = FALSE, intercept.top = TRUE,
+  se = list(pooled_se_extended[, 2], re_se_extended[, 2], fe_se_extended[, 2])
+)
+
+
+{r echo=FALSE, results='asis'}
+cat("<center>",stargazer_models_extended,"<center>")
+
+Result Analysis
+
+Pooled OLS:
+
+The coefficient for the Stringency Index is 843.93 and is not statistically significant.
+
+The coefficient for Median Age is 10,457.87 and is statistically significant at the 1% level, indicating that an increase in the median age is associated with an increase in new COVID-19 cases.
+
+The model’s F-statistic indicates that the model is significant overall.
+
+Random Effects:
+
+The coefficient for the Stringency Index is 94.15 and is not statistically significant.
+
+The coefficient for Median Age is 10,549.04 and is statistically significant at the 1% level, indicating a positive relationship with new COVID-19 cases.
+
+Fixed Effects:
+
+The coefficient for the Stringency Index is -134.62 and is not statistically significant.
+
+Heterogeneity Test
+
+Now we will perform the Hausman test in oreder tocompare fixed effect and random effect models.
+
+{r, results='asis'}
+# Conducting the Hausman test utilizing the defined function
+hausman_test(fe_model_extended, re_model_extended)
+
+E. Time Effect
+
+Add time effects to the previous regressions and re-estimate parameters. Is there any trend effect? If so, try to visualize this effect for all models. Once again, are the estimates of $β_1$ in line with your expectations? Test the heterogeneity in the RE and FE models. Compare RE and FE models with the Hausman test.
+

@@ -1,0 +1,821 @@
+---
+title: "Homework 3"
+author: "Farnam Taheri"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(cache = TRUE)
+library(knitr)
+library(RODBC)
+library(dplyr)
+library(tibble)
+library(ggplot2)
+library(tidyverse)
+library(stargazer)
+library(reshape2)
+library(glm2)
+library(margins)
+```
+
+# Load Access Files
+
+## Define a function to load Access datasets
+
+```{r}
+load_access_data <- function(working_dir, filename, table_name, columns = c("*")) {
+  # Establish connection to the Access database
+  db <- odbcDriverConnect(
+    paste0("Driver={Microsoft Access Driver (*.mdb, *.accdb)};
+           DBQ=", file.path(working_dir, paste0(filename, ".mdb")))
+  )
+  
+  # Construct the query
+  query <- paste0(
+    "SELECT ", paste(columns, collapse = ", "),
+    " FROM ", table_name
+  )
+  
+  # Execute the query and fetch the result
+  df <- as_tibble(
+    sqlQuery(channel = db, query = query, as.is = TRUE)
+  )
+  
+  # Close the database connection
+  odbcClose(db)
+  
+  return(df)
+}
+```
+
+## Set the working directory
+
+```{r warning=FALSE}
+# Set the working directory
+setwd("C:/Users/Acer/Desktop/Metrics/HW3/Data")
+
+# Assign the working directory to a variable
+working_dir <- getwd()
+```
+
+## Load Datasets
+
+```{r}
+# Load Individual Dataset
+Individual_Raw <- load_access_data(working_dir, "CN95_2PERCENT_Individual", "individual_2percent_final")
+```
+
+```{r}
+# Keep only the required columns and drop the rest
+Individual_Raw <- Individual_Raw %>%
+  select(KhanevarID, EducationEvidence, ActivityType, Relationship, Gender, ur, age, MarriageStatus, BirthLiveChild_SoFar, Weight_individual)
+```
+
+# Part I: Preliminary Data Analysis and Logistic Regression
+
+## 1. Data Preparation and Summary Statistics
+
+### Import and clean the dataset as necessary. Construct a binary variable for employment status (1 = employed, 0 = unemployed).
+
+```{r}
+# Prepare the data
+Individual_Prepared <- Individual_Raw %>%
+  # Replace missing values with NA (if any)
+  replace(is.na(.), NA) %>%
+  # Convert ActivityType to a binary variable (Employed = 1, Unemployed = 0)
+  mutate(Employed = ifelse(ActivityType == 1, 1, 0))
+
+# View the prepared data
+knitr::kable(head(Individual_Prepared),
+             digits = 2,
+             align = "lccccccc")
+```
+
+### Generate descriptive statistics segmented by urban and rural classifications for: Household size, Household years of education, Household head years of education, Sons years of education, Urban/Rural Status, Household head age, Sons age, Marriage status of sons, and household head (make this variable binary).
+
+#### Data Cleaning
+
+```{r}
+# Assuming you have a column 'EducationEvidence' in your Individual_Raw dataset
+
+# Convert EducationEvidence to years of education
+education_years <- function(education_code) {
+  case_when(
+    education_code == 1 ~ 5,  # Elementary
+    education_code == 2 ~ 8,  # Intermediate
+    education_code == 3 ~ 10, # High-school (didn't finish)
+    education_code == 4 ~ 12, # Finished High School
+    education_code == 5 ~ 14, # Associate Degree
+    education_code == 6 ~ 16, # Bachelors
+    education_code == 7 ~ 18, # Masters/Professional Doctorate
+    education_code == 8 ~ 20, # Research Doctorate/Post Doc
+    education_code == 15 ~ NA_real_, # Others
+    TRUE ~ NA_real_ # Default case for any other codes
+  )
+}
+
+# Prepare the Individual dataset
+Individual_Prepared <- Individual_Raw %>%
+  mutate(
+    Education_Years = education_years(EducationEvidence)
+  )
+
+# View the updated dataset
+knitr::kable(head(Individual_Prepared),
+             digits = 2,
+             align = "lccccccc")
+```
+
+```{r}
+rm(Individual_Raw)
+```
+
+```{r}
+# Create a new column for household head (binary variable)
+Individual_Prepared$Household_Head <- ifelse(Individual_Prepared$Relationship == 1, 1, 0)
+```
+
+```{r}
+# Create a new column for sons (binary variable)
+Individual_Prepared$Sons <- ifelse(Individual_Prepared$Relationship == 3 & Individual_Prepared$Gender == 1, 1, 0)
+```
+
+```{r}
+# Create a new column for marriage status of sons (binary variable)
+Individual_Prepared$Marriage_Status_Sons <- ifelse(Individual_Prepared$MarriageStatus == 1 & Individual_Prepared$Relationship == 3 & Individual_Prepared$Gender == 1, 1, 0)
+```
+
+```{r}
+# Create a new column for Household Size
+Individual_Prepared$Household_Size <- with(Individual_Prepared, ave(seq_along(KhanevarID), KhanevarID, FUN = length))
+
+# Set Household Size to NULL for non-household heads
+Individual_Prepared$Household_Size[Individual_Prepared$Relationship != 1] <- NA
+```
+
+```{r}
+# Create a new column for Household Size
+Individual_Prepared$Household_Size <- with(Individual_Prepared, ave(seq_along(KhanevarID), KhanevarID, FUN = sum))
+
+# Set Household Size to NULL for non-household heads
+Individual_Prepared$Household_Size[Individual_Prepared$Relationship != 1] <- NA
+```
+
+```{r}
+# Create a new column for Total Household Education Years
+Individual_Prepared$Total_Household_Education_Years <- with(Individual_Prepared, ifelse(Relationship == 1, ave(Education_Years, KhanevarID, FUN = sum), NA))
+
+# Create a new column for Head's Education Years
+Individual_Prepared$Head_Education_Years <- with(Individual_Prepared, ifelse(Relationship == 1, Education_Years, NA))
+```
+
+```{r}
+# Create a new column for Household Head's Age
+Individual_Prepared$Head_Age <- with(Individual_Prepared, ifelse(Relationship == 1, age, NA))
+```
+
+```{r}
+# Create a new column for Household Head's Age
+Individual_Prepared$Sons_Age <- with(Individual_Prepared, ifelse(Sons == 1, age, NA))
+```
+
+```{r}
+Individual_Prepared <- Individual_Prepared %>%
+  mutate(ur = ifelse(ur == 1, "Urban", "Rural"))
+```
+
+#### Calculate the Summary Statistics
+
+```{r}
+# Calculate household size statistics by urban/rural status
+Household_Size_Statistics <- Individual_Prepared %>%
+  group_by(ur) %>%                                 # Group the data by 'ur' (urban/rural status)
+  summarise(
+    Mean = mean(Household_Size, na.rm = TRUE),     # Average household size
+    Median = median(Household_Size, na.rm = TRUE), # Median household size
+    SD = sd(Household_Size, na.rm = TRUE),         # Standard deviation of household size
+    Max = max(Household_Size, na.rm = TRUE),       # Maximum household size
+    Min = min(Household_Size, na.rm = TRUE)        # Minimum household size
+  )
+
+# Format and print the table
+knitr::kable(Household_Size_Statistics,
+    caption = "Household Size Statistics by Urban/Rural Status",  # Add caption
+    align = "lcccccc",  # Set the alignment
+    digits = 2 # Set decimal places to 2
+  )
+```
+
+```{r}
+# Calculate total household education years statistics by urban/rural status
+Total_Household_Education_Years_Statistics <- Individual_Prepared %>%
+  group_by(ur) %>%
+  summarise(
+    Mean = mean(Total_Household_Education_Years, na.rm = TRUE),
+    Median = median(Total_Household_Education_Years, na.rm = TRUE),
+    SD = sd(Total_Household_Education_Years, na.rm = TRUE),
+    Max = max(Total_Household_Education_Years, na.rm = TRUE),
+    Min = min(Total_Household_Education_Years, na.rm = TRUE)
+  )
+
+# Print the table
+knitr::kable(
+  Total_Household_Education_Years_Statistics,
+  caption = "Total Household Education Years Statistics by Urban/Rural Status",
+  align="lcccccc",
+  digits = 2
+  )
+```
+
+```{r}
+# Calculate head education years statistics by urban/rural status
+Head_Education_Years_Statistics <- Individual_Prepared %>%
+  group_by(ur) %>%
+  summarise(
+    Mean = mean(Head_Education_Years, na.rm = TRUE),
+    Median = median(Head_Education_Years, na.rm = TRUE),
+    SD = sd(Head_Education_Years, na.rm = TRUE),
+    Max = max(Head_Education_Years, na.rm = TRUE),
+    Min = min(Head_Education_Years, na.rm = TRUE)
+  )
+
+# Print the table
+knitr::kable(
+  Head_Education_Years_Statistics,
+  caption = "Head Education Years Statistics by Urban/Rural Status",
+  align="lcccccc",
+  digits = 2
+  )
+```
+
+```{r}
+# Calculate Marriage_Status_Sons statistics by urban/rural status
+Marriage_Status_Sons_Statistics <- Individual_Prepared %>%
+  group_by(ur) %>%
+  summarise(
+    Mean = mean(Marriage_Status_Sons, na.rm = TRUE),
+    Median = median(Marriage_Status_Sons, na.rm = TRUE),
+    SD = sd(Marriage_Status_Sons, na.rm = TRUE),
+    Max = max(Marriage_Status_Sons, na.rm = TRUE),
+    Min = min(Marriage_Status_Sons, na.rm = TRUE)
+  )
+
+# Print the table
+knitr::kable(Marriage_Status_Sons_Statistics,
+             caption = "Marriage Status Sons Statistics by Urban/Rural Status",
+             align="lcccccc",
+             digits = 2
+             )
+```
+
+```{r}
+# Calculate head age statistics by urban/rural status
+Head_Age_Statistics <- Individual_Prepared %>%
+  group_by(ur) %>%
+  summarise(
+    Mean = mean(as.numeric(Head_Age), na.rm = TRUE),
+    Median = median(as.numeric(Head_Age), na.rm = TRUE),
+    SD = sd(as.numeric(Head_Age), na.rm = TRUE),
+    Max = max(as.numeric(Head_Age), na.rm = TRUE),
+    Min = min(as.numeric(Head_Age), na.rm = TRUE)
+  )
+
+# Add a caption and print the table
+knitr::kable(
+  Head_Age_Statistics,
+  caption = "Head Age Statistics by Urban/Rural Status",
+  align="lcccccc",
+  digits = 2
+  )
+
+```
+
+```{r}
+# Calculate sons age statistics by urban/rural status
+Sons_Age_Statistics <- Individual_Prepared %>%
+  group_by(ur) %>%
+  summarise(
+    Mean = mean(as.numeric(Sons_Age), na.rm = TRUE),
+    Median = median(as.numeric(Sons_Age), na.rm = TRUE),
+    SD = sd(as.numeric(Sons_Age), na.rm = TRUE),
+    Max = max(as.numeric(Sons_Age), na.rm = TRUE),
+    Min = min(as.numeric(Sons_Age), na.rm = TRUE)
+  )
+
+# Add a caption and print the table
+knitr::kable(
+  Sons_Age_Statistics,
+  caption = "Sons Age Statistics by Urban/Rural Status",
+  align="lcccccc",
+  digits = 2)
+```
+
+```{r}
+# Calculate household head statistics by urban/rural status
+Household_Head_Statistics <- Individual_Prepared %>%
+  group_by(ur) %>%
+  summarise(
+    Mean = mean(Household_Head, na.rm = TRUE),
+    Median = median(Household_Head, na.rm = TRUE),
+    SD = sd(Household_Head, na.rm = TRUE),
+    Max = max(Household_Head, na.rm = TRUE),
+    Min = min(Household_Head, na.rm = TRUE)
+    )
+
+# Add a caption and print the table
+knitr::kable(
+  Household_Head_Statistics,
+  caption = "Household Head Statistics by Urban/Rural Status",
+  align="lcccccc",
+  digits = 2)
+```
+
+## 2. Employment Probability Modeling
+
+### Develop a logistic regression model to predict employment status based on educational level, age, and urban/rural status.
+
+#### Make Data Ready for the Regression:
+
+##### Create Employment Status column:
+
+```{r}
+# Create Employment_Status column based on ActivityType
+# If ActivityType is 1, set Employment_Status to 1 (employed), otherwise set to 0 (unemployed)
+Individual_Prepared$Employment_Status <- ifelse(Individual_Prepared$ActivityType == 1, 1, 0)
+```
+
+##### Create Urban binary column:
+
+```{r}
+# Create Urban binary column from ur character variable
+# If ur is "Urban", set Urban to 1, otherwise set to 0 (for Rural)
+Individual_Prepared$Urban <- ifelse(Individual_Prepared$ur == "Urban", 1, 0)
+```
+
+```{r, include=FALSE}
+# Perform garbage collection to free up memory
+gc()
+```
+
+##### Converting Age Column to Numeric:
+
+```{r}
+# Convert the Age column to a numerical data type
+Individual_Prepared$Age <- as.numeric(Individual_Prepared$age)
+```
+
+##### Convert Response Variable to Binary Integer:
+
+It's important to ensure that the Employment_Status variable is an integer before modeling, as `glm()` requires factors or integers for the response variable.
+
+```{r}
+Individual_Prepared$Employment_Status <- as.integer(Individual_Prepared$Employment_Status)
+```
+
+#### Fit Logistic Regression Model:
+
+```{r warning=FALSE}
+# Fit logistic regression model
+Employment_Logit <- glm(
+  Employment_Status ~ Education_Years + Age + Urban,  # Predict Employment_Status based on Education, Age, and Urban
+  data = Individual_Prepared,  # Use the Individual_Prepared dataset
+  family = binomial(link="logit"),  # Use a binomial distribution with a logit link function
+  na.action = na.exclude,  # Skip missing values
+  weights = Weight_individual  # Use Weight_individual as the weights
+)
+```
+
+#### Generating Formatted Output:
+
+```{r warning=FALSE, results="asis"}
+# Summary of the model
+# Use stargazer to generate HTML output for the glm object
+stargazer(
+  Employment_Logit,  # Generate summary for the Employment_Logit object
+  type = "html",  # Output format
+  title = "<center>Logistic Regression Results<center>",  # title for the table
+  note = "Source: Iran's National Population and Housing Census (NPHC) 1395"  # Note the data source
+  )
+```
+
+### Analyze and discuss the implications of the model’s coefficients and their statistical significance.
+
+-   **Education_Years:** The coefficient (0.055) indicates that for every additional year of education, the likelihood of being employed increases by 5.5%. The relationship is highly statistically significant (p \< 0.001).
+
+-   **Age:** The coefficient (0.030) indicates that for every additional year of age, the likelihood of being employed increases by 3%. The relationship is highly statistically significant (p \< 0.001).
+
+-   **Urban:** The coefficient (-0.388) indicates that living in an urban area decreases the likelihood of being employed by 38.8%. The relationship is highly statistically significant (p \< 0.001).
+
+-   **Constant:** The constant term (-1.891) represents the baseline likelihood of being employed when all independent variables are equal to zero. The high statistical significance (p \< 0.001) suggests that this baseline likelihood is significantly different from zero.
+
+## 3. Gender-specific Analysis
+
+### Conduct logistic regressions separately for males and females.
+
+-   Since the `glm` function is not converging for the female regression, we will use the `glm2` library instead. However, `glm2` objects are not compatible with the `stargazer` function, which we want to use to print the results. To overcome this, we need to transform the `glm2` object into a `glm` object, which can then be used with `stargazer`.
+
+#### Creating the Gender Binary Variable:
+
+We create a new binary column `Male` in the Individual_Prepared dataset, where 1 represents males and 0 represents females, based on the existing `Gender` column.
+
+```{r}
+# Create Gender binary column
+# If Gender is 1 (male), set Male to 1, otherwise set to 0 (for female)
+Individual_Prepared$Male <- ifelse(Individual_Prepared$Gender == 1, 1, 0)
+```
+
+#### Fitting Logistic Regression Models:
+
+We fit separate logistic regression models for males and females using the glm2 function, which is used instead of the standard glm function because it was not converging for the female subset. We include the variables Education_Years, Age, and Urban as predictors, and use the "binomial" family with a "logit" link function.
+
+```{r warning=FALSE}
+# Fit the model for Males
+Employment_Logit_Male <- glm2(Employment_Status ~ Education_Years + Age + Urban,
+                            data = subset(Individual_Prepared, Male == 1),  # Use the Male subset of data
+                             family = binomial(link="logit"),
+                             na.action = na.exclude,
+                             weights = Weight_individual
+                             )
+# Fit the model for Females
+Employment_Logit_Female <- glm2(Employment_Status ~ Education_Years + Age + Urban,
+                               data = subset(Individual_Prepared, Male == 0),
+                               family = binomial(link="logit"),
+                               na.action = na.exclude,
+                               weights = Weight_individual
+                               )
+```
+
+#### Converting glm2 Objects to glm Class:
+
+We convert the glm2 objects to the glm class to make them compatible with the stargazer package for generating HTML output.
+
+```{r, results="asis"}
+# Coerce glm2 objects to glm class for stargazer compatibility
+Employment_Logit_Male_glm <- glm(
+  Employment_Logit_Male$call,  # Use the call component of Employment_Logit_Male
+  data = Employment_Logit_Male$model  # Use the model component of Employment_Logit_Male
+)
+
+Employment_Logit_Female_glm <- glm(
+  Employment_Logit_Female$call,
+  data = Employment_Logit_Female$model
+)
+```
+
+#### Generating Formatted Output:
+
+```{r warning=FALSE, results="asis"}
+# Summary of the Male LR model
+stargazer(Employment_Logit_Male_glm,
+          type = "html",
+          title = "<center>Logistic Regression Results (Male)<center>",
+          note = "Source: Iran's National Population and Housing Census (NPHC) 1395"
+          )
+```
+
+```{r warning=FALSE, results="asis"}
+# Summary of the Female LR model
+stargazer(Employment_Logit_Female_glm,
+          type = "html",
+          title = "<center>Logistic Regression Results (Female)<center>",
+          note = "Source: Iran's National Population and Housing Census (NPHC) 1395"
+          )
+```
+
+### Compare and contrast the influence of education, urban/rural and having child status on full-time employment across genders.
+
+#### **Education Years:**
+
+-   **Males**: The coefficient for `Education_Years` is **0.001** with a standard error of **0.0002**, indicating a small but statistically significant positive effect on employment probability.
+
+-   **Females**: The coefficient for `Education_Years` is much higher at **0.019** with a standard error of **0.0001**, suggesting that each additional year of education has more positive impact on the employment probability for females than for males.
+
+#### **Age:**
+
+-   **Males**: `Age` has a coefficient of **0.008** with a standard error of **0.00004**, showing a positive relationship between age and employment probability.
+
+-   **Females**: The coefficient for `Age` is **0.002** with a standard error of **0.00003**, which is positive but smaller than that for males, indicating that age is a less important predictor of employment for females.
+
+#### **Urban:**
+
+-   **Males**: The `Urban` coefficient is **-0.087** with a standard error of **0.002**, indicating that living in an urban area is associated with a lower probability of employment for males.
+
+-   **Females**: The `Urban` coefficient for females is **-0.032** with a standard error of **0.001**, also negative but less so than for males, suggesting that the urban/rural status has a less negative impact on females' employment probability.
+
+#### **Constant (Intercept):**
+
+-   **Males**: The `constant` is **0.352** with a standard error of **0.002**, suggesting that the baseline probability of employment for males, when all other variables are zero, is positive.
+
+-   **Females**: The c`onstant` for females is **-0.133** with a standard error of **0.002**, indicating a negative baseline probability of employment when all other variables are zero.
+
+#### $$\Large\textbf{Conclusion}$$
+
+-   `Education_Years` has a stronger positive effect for **females** **(0.019)** compared to **males** **(0.001)**.
+
+-   `Age` has a stronger positive effect for **males** **(0.008)** compared to **females** **(0.002)**.
+
+-   `Urban` has a stronger negative effect for **males** **(-0.087)** compared to **females** **(-0.032)**.
+
+# Part II: Comparative Analysis of Modeling Approaches
+
+## 1. Model Comparison
+
+### Apply Probit and Linear Probability Model (LPM) techniques for the question in Part I subsection 2.
+
+#### Fitting a Probit Model:
+
+We fit a Probit model to compare the results with the logistic regression model. The Probit model uses a probit link function, which is similar to the logit function but uses a different distribution.
+
+```{r warning=FALSE}
+# Fit Probit model
+Employment_Probit <- glm(Employment_Status ~ Education_Years + Age + Urban,
+                         data = Individual_Prepared,
+                         family = binomial(link="probit"), # Use a binomial distribution with a probit link function
+                         na.action = na.exclude,
+                         weights = Weight_individual
+                         )
+```
+
+#### Fitting a Linear Probability Model (LPM):
+
+We fit an LPM model to compare the results with the logistic regression model. The LPM model uses a linear regression model, which assumes a linear relationship between the independent variables and the probability of employment.
+
+```{r warning=FALSE}
+# Fit LPM model
+Employment_LPM <- lm(Employment_Status ~ Education_Years + Age + Urban, 
+                     data = Individual_Prepared,
+                     weights = Weight_individual
+                     )
+```
+
+#### Generating Formatted Output:
+
+##### For Probit Model:
+
+```{r warning=FALSE, results="asis"}
+# Use stargazer to generate HTML output for the glm objects
+stargazer(Employment_Probit,
+          type="html",
+          title = "<center>Probit Model Results<center>",
+          note = "Source: Iran's National Population and Housing Census (NPHC) 1395",
+          single.row = TRUE
+          )
+```
+
+##### For LPM:
+
+```{r warning=FALSE, results="asis"}
+# Use stargazer to generate HTML output for the glm objects
+stargazer(Employment_LPM,
+          type="html",
+          title = "<center>LPM Model Results<center>",
+          note = "Source: Iran's National Population and Housing Census (NPHC) 1395"
+          )
+```
+
+### Evaluate and compare these models with the Logistic regression model, focusing on model fitness and data interpretation.
+
+When comparing the `Probit`, `LPM`, and `Logistic Regression` models, it's crucial to understand that they differ fundamentally in their assumptions and link functions, Which make direct comparison using traditional fit measures impossible. The Probit model presumes error normality, Logistic Regression linear log-odds, and the LPM a linear predictor-outcome relationship. Since the r-squared mesaure is not defined on Logistic Regression and LPM models, we shhould use **Pseudo R-squared (PR2)**, which provides a unified framework for comparing models fittness.
+
+Calculating `PR2` involves comparing the residual deviance of each model to that of a null model. For the `Probit` model, `PR2` is `1 - (Employment_Probit$deviance / Employment_Probit$null.deviance)`, indicating the null deviance proportion explained by the model's predictors. This calculation is similarly applied to the `Logistic Regression` models, and the value is same as $R2$ in `LPM` model. `PR2` values range from 0 to 1, with higher values suggesting better model fit, yet a high PR2 alone doesn't imply superiority due to potential overfitting risks.
+
+#### Calculate Pseudo R-squared
+
+```{r}
+# Calculate pseudo R-squared for logistic regression
+logreg_pseudo_r2 <- 1 - (Employment_Logit$deviance) / (Employment_Logit$null.deviance)
+
+# Calculate pseudo R-squared for probit
+probit_pseudo_r2 <- 1 - (Employment_Probit$deviance) / (Employment_Probit$null.deviance)
+
+# Calculate pseudo R-squared for LPM
+lpm_pseudo_r2 <- summary(Employment_LPM)$r.squared
+
+# Compare pseudo R-squared values
+comparison_df <- data.frame(
+	Model = c("Logistic Regression", "Probit", "LPM"),
+	Pseudo_R_Squared = c(logreg_pseudo_r2, probit_pseudo_r2, lpm_pseudo_r2)
+)
+```
+
+#### Print the Results
+
+```{r}
+# Compare pseudo R-squared values across different models to evaluate model fit
+knitr::kable(comparison_df,
+            digits = 4,
+            align = "lccccc",
+            caption = "Comparison of Pseudo R-Squared Values for Different Models")
+```
+
+Based on the pseudo R-squared values, we can see that:
+
+-   `LPM` has the **highest** pseudo R-squared value (0.0480), indicating that it explains the most variation in the outcome variable.
+
+-   `Probit` has a **slightly lower** pseudo R-squared value (0.0391) compared to LPM.
+
+-   `Logistic` Regression has the **lowest** pseudo R-squared value (0.0378) among the three models.
+
+This suggests that `LPM` is the **best-fitting model**, followed by `Probit` and then `Logistic Regression`.
+
+## 2. Documentation of Findings
+
+### Report your results of your regressions all together in regression table using *”stargazer”* library in R.
+
+```{r warning=FALSE, results="asis"}
+# Create a regression table with all models
+stargazer(Employment_Logit, Employment_Probit, Employment_LPM, 
+          type = "html",
+          title = "Regressions Results", 
+          digits = 4, 
+          model.names = TRUE,   # Include the model names in the table
+          note = "Source: Iran's National Population and Housing Census (NPHC) 1395"
+          )
+```
+
+```{r, include=FALSE}
+gc()
+```
+
+# Part III: Marginal Effects
+
+## Marginal Effects Computation
+
+### Calculate and interpret the Marginal Effects at the Means (MEMs) for the significant variables in logit and probit model in previous part.
+
+To calculate and interpret the Marginal Effects at the Means (MEMs) for the significant variables in the logit and probit models, we can use the **margins** package in R. Note that the package is not available in the `CRAN` repository and must be downloaded and installed manually.
+
+From the **margins** package, we use the `margins()` function to calculate the marginal effects. This function calculates the change in the probability of the outcome (Employment_Status) for a one-unit change in the predictor variable, while holding all other variables constant at their means.
+
+#### Logit Model:
+
+```{r}
+# Calculate MEMs for logit model
+MEM_Logit <- margins(
+	Employment_Logit,  # Model object
+	variables = c("Age", "Education_Years", "Urban")  # Specify the predictor variables for which to calculate MEMs
+	)
+```
+
+```{r warning=FALSE}
+# Display the MEMs in a neat table
+knitr::kable(summary(MEM_Logit),
+             digits = 3,
+             align='lcccccc',
+             title = "Marginal Effects for the Logit Model"
+             )
+```
+
+#### Probit Model:
+
+```{r}
+MEM_Probit <- margins(
+	Employment_Probit,
+	variables = c("Age", "Education_Years", "Urban") 
+)
+```
+
+```{r}
+# Display the MEMs in a neat table
+knitr::kable(summary(MEM_Probit),
+             digits = 3,
+             align = 'lcccccc',
+             title = "Marginal Effects for the Probit Model"
+             )
+```
+
+#### Interpretation:
+
+#### **Logit Model:**
+
+-   **Age:** A one-unit increase in `Age` is will end up in a **0.006** increase in the probability of `Employment_Status`, holding all other variables constant at their means. (Its notable that holding Urban/Rural constant at the mean has no meaning.)
+
+-   **Education_Years:** A one-unit increase in `Education_Years` is associated with a **0.012** increase in the probability of `Employment_Status`, holding all other variables constant at their means.
+
+-   **Urban:** A one-unit increase in `Urban` (i.e., moving from rural to urban) is associated with a **0.085** decrease in the probability of Employment_Status, holding all other variables constant at their means.
+
+##### **Probit Model:**
+
+-   **Age:** A one-unit increase in `Age` is associated with a **0.007** increase in the probability of `Employment_Status`, holding all other variables constant at their means.
+
+-   **Education_Years:** A one-unit increase in `Education_Years` is associated with a **0.012** increase in the probability of `Employment_Status`, holding all other variables constant at their means.
+
+-   **Urban:** A one-unit increase in `Urban` (i.e., moving from rural to urban) is associated with a **0.085** decrease in the probability of Employment_Status, holding all other variables constant at their means.
+
+The MEMs represent the change in the probability of `Employment_Status` for a one-unit change in the predictor variable, while holding all other variables constant at their means. In summary:
+
+-   `Age` and `Education_Years` have a positive effect on `Employment_Status`.
+
+-   `Urban` has a negative effect on `Employment_Status` (i.e., moving from rural to urban is associated with a decrease in the probability of getting employed).
+
+# Part IV: Marital Status and Its Interactions
+
+## 1. Marital Status Variable
+
+### Develop a binary variable for marital status (1 = married, 0 = unmarried).
+
+```{r}
+# Create a binary variable for marital status (1 = married, 0 = unmarried)
+Individual_Prepared$Married <- ifelse(Individual_Prepared$MarriageStatus == 1, 1, 0)
+```
+
+## 2.Interaction Term Analysis
+
+### Integrate an interaction term between marital status and educational attainment into the regression model.
+
+#### Run the Models with Interaction Terms using glm2:
+
+```{r warning=FALSE}
+# Logit Model with Interaction Term
+Employment_Logit_Interaction <- glm2(
+  Employment_Status ~ Age + Urban + Education_Years + Married + Education_Years * Married, # Add Married and interaction term to the model
+  data = Individual_Prepared,
+  family = binomial(link="logit"),
+  na.action = na.exclude,
+  weights = Weight_individual
+  )
+```
+
+```{r warning=FALSE}
+# Probit Model with Interaction Term
+Employment_Probit_Interaction <- glm2(
+  Employment_Status ~ Age + Urban + Education_Years + Married + Education_Years * Married, # Add Married and interaction term to the model
+  data = Individual_Prepared,
+  family = binomial(link="logit"),
+  na.action = na.exclude,
+  weights = Weight_individual
+  )
+```
+
+### Examine the modifying effect of marital status on the relationship between education and employment.
+
+#### Converting glm2 Objects to glm Class:
+
+```{r, results="asis"}
+# Coerce glm2 objects to glm class for stargazer compatibility
+Employment_Logit_Interaction_glm <- glm(
+  Employment_Logit_Interaction$call,
+  data = Employment_Logit_Interaction$model  
+)
+
+Employment_Probit_Interaction_glm <- glm(
+  Employment_Probit_Interaction$call,
+  data = Employment_Probit_Interaction$model
+)
+```
+
+#### Print the Results
+
+```{r warning=FALSE, results="asis"}
+# Use stargazer to generate HTML output for the glm objects
+stargazer(Employment_Logit_Interaction_glm,
+          type="html",
+          title = "<center>Logit Model with Interaction Results<center>",
+          note = "Source: Iran's National Population and Housing Census (NPHC) 1395"
+          )
+```
+
+```{r warning=FALSE, results="asis"}
+# Use stargazer to generate HTML output for the glm objects
+stargazer(Employment_Probit_Interaction_glm,
+          type="html",
+          title = "<center>Probit Model with Interaction Results<center>",
+          note = "Source: Iran's National Population and Housing Census (NPHC) 1395"
+          )
+```
+
+#### Analyzing the Results:
+
+The coefficients for Education_Years, Married, and the interaction term (Education_Years:Married) in the models are:
+
+##### **Logit Model:**
+
+-   Education_Years: 0.014 (p \< 0.01)
+
+-   Married: 0.279 (p \< 0.01)
+
+-   Education_Years:Married: -0.005 (p \< 0.01)
+
+##### **Probit Model:**
+
+-   Education_Years: 0.014 (p \< 0.01)
+
+-   Married: 0.279 (p \< 0.01)
+
+-   Education_Years:Married: -0.005 (p \< 0.01)
+
+##### **Interpretation:**
+
+These coefficients suggest that:
+
+-   `Education_Years` has a positive effect on `Employment_Status` in both models.
+
+-   `Married` has a positive effect on `Employment_Status` in both models.
+
+-   The interaction term (`Education_Years:Married`) has a negative effect on Employment_Status in both models, indicating that the effect of `Education_Years` on `Employment_Status` is significantly different for `married` and `unmarried` individuals.
+
+The interaction term (`Education_Years:Married`) has a coefficient of **-0.005**, which means that for every one-unit increase in `Education_Years`, the probability of `Employment_Status` increases by **0.005** less for **married** individuals compared to **unmarried** individuals.
+
+In other words, the positive effect of `Education_Years` on `Employment_Status` is slightly **reduced** for **married** individuals compared to **unmarried** individuals. This suggests that married individuals may face slightly different labor market conditions or opportunities compared to unmarried individuals, even after controlling for education.

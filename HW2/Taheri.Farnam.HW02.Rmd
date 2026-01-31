@@ -1,0 +1,448 @@
+---
+title: "Metrics II - HW02"
+author: "Farnam Taheri"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(broom)
+library(haven)
+library(knitr)
+library(MASS)
+library(gmm)
+library(margins)
+library(stats)
+```
+
+### Question 1
+
+#### a. What is the mean and variance of a χ2 random variable with d degree of freedom? Write down the two moment conditions. Based on the number of parameters and moments, justify using GMM.
+
+A $\chi^2$ (chi-squared) random variable with **d degrees of freedom** has:
+
+-   **Mean**: The mean of a χ2 distribution is equal to its degrees of freedom, i.e., $$\mu = d$$
+
+-   **Variance**: The variance of a χ2 distribution is twice its degrees of freedom, i.e., $$\sigma^2 = 2d$$
+
+The two moment conditions for a χ2 random variable are:
+
+1.  The first moment (mean) is equal to the degrees of freedom: $$E(X) = d$$
+2.  The second moment (variance) is twice the degrees of freedom: $$Var(X) = 2d$$
+
+The Generalized Method of Moments (GMM) is justified in this case because we have **two moment conditions** and **one parameter (d)** to estimate. Since the number of moment conditions is greater than the number of parameters, we can use GMM to estimate the parameter.
+
+#### b. Use RMD and draw a sample of a size 500. Then use the two-step GMM. to estimate the parameter using sample moment condition. (Don’t forget to set the seed in RMD for robust results.)
+
+```{r}
+# Set seed for reproducibility
+set.seed(123)
+```
+
+```{r}
+# Draw a sample of size 500 from a chi-squared distribution
+# The degrees of freedom parameter is set to 5
+y <- rchisq(500, df = 5)
+```
+
+```{r}
+# Define moment conditions for the mean
+# The function g1 takes two arguments: theta (the parameter to be estimated) and x (the data)
+# It returns the difference between the data and the parameter, which is the moment condition for the mean
+g1 <- function(theta, x) {
+  m1 <- x - theta
+  cbind(m1)
+}
+```
+
+```{r}
+# The initial estimate for the parameter is the sample mean
+theta.init <- mean(y)
+```
+
+```{r warning=FALSE}
+# One-step GMM estimation for the mean
+# The arguments are the moment condition function, the data, and the initial estimate for the parameter
+gmm.res1 <- gmm(g1, x = y, theta.init)
+```
+
+```{r}
+# Print results
+print(gmm.res1)
+```
+
+```{r}
+# Define moment conditions for the variance
+# The function g2 returns the moment condition for the variance
+g2 <- function(theta, x) {
+  m2 <- (x - theta)^2 - 2*theta
+  cbind(m2)
+}
+```
+
+```{r warning=FALSE}
+# One-step GMM estimation for the variance
+# The gmm function performs the GMM estimation for the variance
+gmm.res2 <- gmm(g2, x = y, theta.init)
+```
+
+```{r}
+# Print results
+print(gmm.res2)
+```
+
+```{r}
+# Define moment conditions for both the mean and the variance
+# The function g3 returns both moment conditions
+g3 <- function(theta, x) {
+  m1 <- x - theta
+  m2 <- (x - theta)^2 - 2*theta
+  cbind(m1, m2)
+}
+```
+
+```{r warning=FALSE}
+# One-step GMM estimation using both moment conditions with uniform weights
+# The gmm function performs the GMM estimation using both moment conditions
+# The argument wmatrix = "ident" specifies that a uniform weight matrix should be used
+gmm.res3 <- gmm(g3, x = y, theta.init, wmatrix = "ident")
+```
+
+```{r}
+## Print results
+print(gmm.res3)
+```
+
+```{r warning=FALSE}
+# Two-step GMM estimation using both moment conditions with optimal weights
+# The argument wmatrix = "optimal" specifies that an optimal weight matrix should be used
+gmm.res4 <- gmm(g3, x = y, theta.init, wmatrix = "optimal")
+```
+
+```{r}
+# Print results
+print(gmm.res4)
+
+```
+
+### Question 2
+
+#### a. Use the *mepsdocvis* dataset provided in the zip file. Consider Poisson regression of docvis on an intercept, private, chronic, and income. First explain what does Poisson command do in Stata. Then find the following: the sample average prediction of docvis; the average prediction if we use the Poisson estimates to predict docvis for males only; the prediction for someone who is privately insured, has a chronic condition, and has an income of \$20,000 (so income=20). Provide a direct interpretation of the estimated Poisson coefficients.
+
+```{r}
+# read 'mepsdocvis.dta'
+data <- read_dta("mepsdocvis.dta")
+```
+
+##### Fit the Poisson regression:
+
+```{r}
+# Fit the Poisson model
+model <- glm(docvis ~ private + totchr + income, family = "poisson", data = data)
+
+# Display the summary of the model
+summary(model)
+
+```
+
+##### Sample average prediction of `docvis`:
+
+```{r}
+# Predict docvis for the entire dataset
+data$predicted_docvis <- predict(model, type = "response")
+
+# Calculate the sample average prediction
+mean(data$predicted_docvis)
+
+```
+
+##### Average prediction for males only:
+
+```{r}
+# dataset of males
+males_only <- data %>% filter(female == 0)
+
+# Predict docvis for males only
+males_only$predicted_docvis <- predict(model, newdata = males_only, type = "response")
+
+# Calculate the average prediction for males
+mean(males_only$predicted_docvis)
+  
+```
+
+##### Prediction for an individual with private insurance, "a" chronic condition, and an income of \$20,000:
+
+```{r}
+# Create a new data frame for the individual
+individual <- data.frame(private = 1, totchr = 1, income = 20)
+
+# Predict docvis for the individual
+individual$predicted_docvis <- predict(model, newdata = individual, type = "response")
+
+# Display the prediction
+individual_prediction <- individual$predicted_docvis
+individual_prediction
+
+```
+
+##### Interpret:
+
+```{r}
+# Get the tidy version of the model summary
+tidy_model <- tidy(model)
+
+knitr::kable(tidy_model, format = "markdown", digits = 4, align='lcccccc')
+```
+
+-   **(Intercept)**: The expected log count of `docvis` when all other variables are zero is **1.2501**. The standard error of this estimate is **0.0149**, and the z-statistic is **83.6487**, indicating that the intercept is highly significant (p-value \< 0.0001).
+
+-   **private**: The coefficient for `private` is **0.1315**, suggesting that having private insurance is associated with an expected increase in the log count of `docvis` by **0.1315**. The standard error is **0.0132**, and the z-statistic is **10.0024**, which also indicates a highly significant effect (p-value \< 0.0001).
+
+-   **totchr**: The coefficient for `totchr` is **0.2743**, implying that each additional chronic condition is associated with an expected increase in the log count of `docvis` by **0.2743**. The standard error is **0.0043**, and the z-statistic is **64.2101**, showing a highly significant effect (p-value \< 0.0001).
+
+-   **income**: The coefficient for `income` is **0.0012**, indicating that for every unit increase in income (presumably in thousands since the income is set to 20 for an income of \$20,000), there is an expected increase in the log count of `docvis` by **0.0012**. The standard error is **0.0003**, and the z-statistic is **3.9316**, which is significant at the 0.0001 level (p-value = 0.0001).
+
+#### (extra credit) First explain the marginal effect (ME) in nonlinear models. Then find the marginal effect of changing regressors on the conditional mean in the following ways (use predefined Stata commands): the AME
+
+using calculus methods for all regressors; and the MER for someone who is privately insured, has a chronic condition, and has an income of \$20,000 (so income=20).
+
+```{r}
+# Calculate the Average Marginal Effects (AME)
+ame <- margins(model)
+
+# Summarize the AME
+summary_ame <- summary(ame)
+
+# Calculate the Marginal Effects at Representative values (MER) for an individual
+individual_mer <- data.frame(private = 1, totchr = 1, income = 20)
+mer <- margins(model, at = individual_mer)
+
+# Summarize the MER
+summary_mer <- summary(mer)
+
+# Print the summaries
+knitr::kable(summary_ame, format = "markdown", digits = 3, align='lcccccc')
+
+```
+
+In nonlinear models, the **marginal effect (ME)** is a measure of how much the expected value of the dependent variable changes in response to a one-unit change in a predictor variable, while holding other variables fixed. Unlike linear models where the coefficients directly represent the marginal effects, in nonlinear models, the relationship between the predictors and the outcome variable is not constant across all values of the predictors. Therefore, MEs are calculated at specific points or averaged across the sample.
+
+The **Average Marginal Effect (AME)** is the average of these marginal effects across all observations in the dataset. It provides a summary measure of the impact of a one-unit change in a predictor variable on the expected outcome, averaged over all cases.
+
+The **Marginal Effect at Representative values (MER)** is the marginal effect calculated at specific values of the predictor variables, often at the mean or median of the predictors, or at other representative values of interest.
+
+Now, let's interpret the AMEs by the previous reults:
+
+-   **Income**: The AME of **0.008** suggests that, on average, a one-unit increase in income (By thousands) is associated with an **0.8%** increase in the predicted number of doctor visits (`docvis`), since for small values the percentage change is approximately equal to the AME when the outcome is in log form. The standard error (SE) of **0.002** indicates the precision of this estimate, and the z-statistic of **3.930** with a p-value of **0** shows that the effect of income is statistically significant. The confidence interval ranges from **0.004** to **0.012**, providing a 95% confidence range for the AME.
+
+-   **Private**: The AME of **0.898** indicates that, on average, having private insurance is associated with an **143.6%** increase in the predicted number of doctor visits, calculated by the formula $$e^{0.898} - 1 \approx 1.436$$ or 143.6%. The SE of **0.090** and the z-statistic of **9.982** with a p-value of **0** confirm that the effect of private insurance is statistically significant and substantial. The confidence interval ranges from **0.721** to **1.074**.
+
+-   **Totchr**: The AME of **1.872** implies that, on average, each additional chronic condition is associated with a **546.7%** increase in the predicted number of doctor visits, calculated by $$e^{1.872} - 1 \approx 5.467$$ or 546.7%. The SE of **0.031** and the z-statistic of **59.506** with a p-value of **0** demonstrate that the effect of chronic conditions is highly significant and very large. The confidence interval ranges from **1.810** to **1.933**.
+
+These AMEs provide insights into how changes in the predictors are expected to affect the number of doctor visits on average across the population. The fact that all p-values are **0** indicates that we can reject the null hypothesis which is the predictors have no effect on the outcome variable.
+
+### Question 3
+
+In this problem, you will use the Simulated Method of Moments (SMM) to estimate the marginal propensity to consume (MPC) in a simple economic model. Consider a basic consumption-saving model where the consumer decides on consumption ($C$) and saving ($S$) based on their income ($Y$). The model is given by: $$C = α · Y$$ $$S = Y − C$$ where $α$ represents the marginal propensity to consume.
+
+#### 1: Income Distribution
+
+##### What distribution for Y do you think best matches the real-world data? Simulate income data (Y) and calculate consumption © and saving (S) for a given value of α according to your proposed distribution.
+
+Real-world income data often follows a log-normal distribution. This distribution can represent the wide disparity in income, where most people earn a modest income, but a few earn significantly more.
+
+```{r}
+# Simulate income data (Y)
+set.seed(123)
+n <- 1000  ## number of observations
+mu <- 3    ## mean of log-normal distribution
+sigma <- 1 ## standard deviation of log-normal distribution
+Y <- rlnorm(n, meanlog = mu, sdlog = sigma)
+
+# Assume a value for alpha
+alpha <- 0.6
+
+# Calculate consumption (C) and saving (S)
+C <- alpha * Y
+S <- Y - C
+```
+
+#### 2: Empirical Moments
+
+##### Compute the empirical moments (mean and variance) of C and S.
+
+We compute the empirical moments (mean and variance) of C and S from the simulation.
+
+```{r}
+# Calculate mean and variance of consumption and saving
+simulated_mean_consumption <- mean(C)
+simulated_var_consumption <- var(C)
+simulated_mean_saving <- mean(S)
+simulated_var_saving <- var(S)
+
+# Display the results with variable names
+cat("Mean of Consumption (C):", simulated_mean_consumption, "\n")
+cat("Variance of Consumption (C):", simulated_var_consumption, "\n")
+cat("Mean of Saving (S):", simulated_mean_saving, "\n")
+cat("Variance of Saving (S):", simulated_var_saving, "\n")
+```
+
+#### Part 3: Estimation of $α$
+
+##### Estimate the value of $α$ that makes the simulated moments as close as possible to the empirical moments observed in real-world data.
+
+To estimate $α$, we would compare the simulated moments with empirical moments from real-world data. This typically involves an optimization process to minimize the difference between the simulated and empirical moments.
+
+```{r message=FALSE, warning=FALSE}
+# Define the objective function
+objective_function <- function(alpha, empirical_mean_C, empirical_var_C, empirical_mean_S, empirical_var_S) {
+  set.seed(123)
+  
+  simulated_Y <- rlnorm(1000, meanlog = 10, sdlog = 1) ## Simulate income data
+  simulated_C <- alpha * simulated_Y ## Calculate consumption
+  simulated_S <- simulated_Y - simulated_C ## Calculate saving
+  
+  # Calculate simulated moments
+  simulated_mean_C <- mean(simulated_C)
+  simulated_var_C <- var(simulated_C)
+  simulated_mean_S <- mean(simulated_S)
+  simulated_var_S <- var(simulated_S)
+  
+  # Calculate the sum of squared differences between simulated and empirical moments
+  sum_of_squares <- (simulated_mean_C - empirical_mean_C)^2 +
+                    (simulated_var_C - empirical_var_C)^2 +
+                    (simulated_mean_S - empirical_mean_S)^2 +
+                    (simulated_var_S - empirical_var_S)^2
+  return(sum_of_squares)
+}
+
+# Empirical moments from real-world data (these are hypothetical values)
+empirical_mean_C <- 20000 ## Hypothetical mean of consumption
+empirical_var_C <- 4000000 ## Hypothetical variance of consumption
+empirical_mean_S <- 15000 ## Hypothetical mean of saving
+empirical_var_S <- 3000000 ## Hypothetical variance of saving
+
+# Use optim with the method "Brent" and specify the interval for alpha
+optim_results <- optim(par = 0.6, fn = objective_function,
+                       empirical_mean_C = empirical_mean_C,
+                       empirical_var_C = empirical_var_C,
+                       empirical_mean_S = empirical_mean_S,
+                       empirical_var_S = empirical_var_S,
+                       method = "Brent", lower = 0, upper = 1)
+
+# Final estimated value of alpha
+cat("Final estimated value of alpha:", optim_results$par, "\n")
+
+
+```
+
+#### 4: Economic Significance
+
+##### Discuss the economic significance of the estimated $α$.
+
+The estimated value of $\alpha$, which is approximately 0.50, has significant economic implications. In the context of this model, $\alpha$ represents the propensity to consume out of total income.
+
+1.  **Marginal Propensity to Consume (MPC)**: The value of $\alpha$ is essentially the MPC, which indicates that for every additional unit of income, about 50% is consumed. This is a critical parameter in understanding consumer behavior and in the formulation of fiscal policies.
+
+2.  **Multiplier Effect**: The MPC is directly related to the multiplier effect in Keynesian economics. A higher MPC (closer to 1) suggests a larger multiplier effect, meaning changes in investment or government spending can have a more pronounced impact on the overall economy.
+
+3.  **Savings and Investment**: Since $\alpha$ also determines the proportion of income saved (1-$\alpha$), a value of 0.50 suggests an equal propensity to save.
+
+### Question 4
+
+Consider the following probability distribution: $$ f(x|\theta,K) = \theta K^\theta x^{(-\theta-1)}$$ Where $K \geq 0$ and $X_1, X_2, ..., X_n$ is an i.i.d sample of size $n$.
+
+#### a) Find the Maximum Likelihood Estimator of $\theta$.
+
+The likelihood function $L(\theta)$ given the sample $X_1, X_2, ..., X_n$ is:
+
+$$ L(\theta) = \prod_{i=1}^{n} \theta K^\theta x_i^{-\theta-1)} $$
+
+Taking the natural logarithm of the likelihood function to obtain the log-likelihood function $\ell(\theta)$:
+
+$$ \ell(\theta) = \sum_{i=1}^{n} [\ln(\theta) + \theta \ln(K) - (\theta+1) \ln(x_i)] $$
+
+Differentiating $\ell(\theta)$ with respect to $\theta$ and setting it to zero gives us the score function:
+
+$$ \frac{\partial \ell(\theta)}{\partial \theta} = \frac{n}{\theta} + n \ln(K) - \sum_{i=1}^{n} \ln(x_i) = 0 $$
+
+Solving for $\theta$ will give us the MLE of $\theta$.
+
+$$  \theta = \frac{n}{\sum_{i=1}^{n} \ln(x_i) - n \ln(K) } $$
+
+#### b) Using Method of Moments, find a formula for parameter $\theta$.
+
+For the Method of Moments, we equate the theoretical moments to the empirical moments. The first moment (mean) of the distribution is:
+
+$$\begin{align*} E[X]
+&= \int_{1}^{\infty} x f(x|\theta,K) dx \\
+&= \int_{1}^{\infty} x \theta K^\theta x^{(-\theta-1)} dx \\
+&= \theta K^\theta \int_{1}^{\infty} x^{-\theta} dx \\
+\end{align*}$$
+
+The integral evaluates to a piecewise function:
+
+$$
+\theta K^\theta \begin{cases} 
+\frac{1}{\theta - 1} & \text{for } \theta > 1 \\
+\infty & \text{otherwise}
+\end{cases}
+$$
+
+So for $\theta >1$, we have: $$E[X] = K^\theta \frac{\theta }{\theta - 1}$$
+
+### Question 5
+
+#### Consider the following probability distribution: $$f(x|\sigma) = \frac{1}{2\sigma} \exp\left(-\frac{|x|}{\sigma}\right)$$ Use the Method of Moments to estimate the parameter $\sigma$.
+
+The double exponential probability density function is:$$ f(x|\sigma) = \frac{1}{2\sigma} \exp\left(-\frac{|x|}{\sigma}\right)$$
+
+The first population moment is given by: $$ E(X) = \int_{-\infty}^{\infty} \frac{x}{2\sigma} \exp\left(-\frac{|x|}{\sigma}\right) dx = 0 $$Calculating the integral, we will find out that, the result does not depend on $\sigma$ since the integrand is an odd function ($g(-x) = -g(x)$). Therefore, the first moment is not suitable for developing a method of moments estimator of $\sigma$.
+
+Now let's check the second moment: $$ E(X^2) = \int_{-\infty}^{\infty} \frac{x^2}{2\sigma} \exp\left(-\frac{|x|}{\sigma}\right) dx = 2 \int_{0}^{\infty} \frac{x^2}{2\sigma} \exp\left(-\frac{x}{\sigma}\right) dx = 2\sigma^2\quad \text{for}\:\quad \left|{\arg{\left(\sigma \right)}}\right| < \frac{\pi}{2} $$
+
+Solving for $\sigma$ gives us: $$ \hat\sigma = \sqrt{\frac{1}{2\mu_2}}$$
+
+### Question 6
+
+Individuals are asked at time $t$ to remember what they had been through before. We have a model that predicts the probability of correct recall $p(w, t)$ where $W = (w_1, w_2)$ is the vector of parameters. The model is given by:
+
+$$
+p(w, t) = w_1 \exp(-w_2 t)
+$$
+
+We have data containing $m$ observations of $y_i (0 \leq y_i \leq 1)$ which represents the proportion of correct recalls at time $t_i (i = 1, 2, \ldots, m)$: $y_i = \frac{x_i}{n}$, where $x_i$ is the number of correct answers that follows a binomial distribution with probability $p(w, t)$ and $n$ is the number of independent tests.
+
+#### a) Write the Log Likelihood function of the model.
+
+The likelihood function $L$ for the model, given the binomial distribution, is the product of the probabilities for each observation:
+
+$$
+L(w) = \prod_{i=1}^{m} \binom{n}{x_i} p(w, t_i)^{x_i} (1 - p(w, t_i))^{n - x_i}
+$$
+
+Since $y_i = \frac{x_i}{n}$, we can rewrite $x_i$ as $x_i = y_i n$. Substituting $p(w, t_i)$ with the given model $w_1 \exp(-w_2 t_i)$, we get:
+
+$$
+L(w) = \prod_{i=1}^{m} \binom{n}{y_i n} (w_1 e^{-w_2 t_i})^{y_i n} (1 - w_1 e^{-w_2 t_i})^{n - y_i n}
+$$
+
+The log likelihood function $\ell(w)$ is the natural logarithm of the likelihood function:
+
+$$
+\ell(w) = \sum_{i=1}^{m} \left[ \log \binom{n}{y_i n} + y_i n \log(w_1 e^{-w_2 t_i} + (n - y_i n) \log(1 - w_1 e^{-w_2 t_i}) \right]
+$$
+
+#### b) Find the first order conditions for the Maximum Likelihood Estimator.
+
+The first order conditions for the Maximum Likelihood Estimator are obtained by taking the partial derivatives of $\ell(w)$ with respect to $w_1$ and $w_2$, and setting them to zero:
+
+$$
+\frac{\partial \ell(w)}{\partial w_1} = 0, \quad \frac{\partial \ell(w)}{\partial w_2} = 0
+$$ $$\begin{align*}
+\frac{\partial \ell(w)}{\partial w_1} &= \sum_{i=1}^{m} \left[ \frac{y_i n}{w_1} - \frac{n - y_i n}{1 - w_1 e^{-w_2 t_i}} e^{-w_2 t_i} \right] = 0\\
+\frac{\partial \ell(w)}{\partial w_2} &= \sum_{i=1}^{m} \left[ -y_i n t_i e^{-w_2 t_i} + \frac{(n - y_i n) t_i w_1 e^{-w_2 t_i}}{1 - w_1 e^{-w_2 t_i}} \right] = 0
+\end{align*}$$
